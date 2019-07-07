@@ -76,7 +76,14 @@ func main() {
 				os.Exit(1)
 			}
 
-			tibiaBinary = bytes.Replace(tibiaBinary, append([]byte(propertyLoginWebService+tibiaLoginWebService)), append([]byte(propertyLoginWebService+customLoginWebService)), 1)
+			originalWebService := []byte(propertyLoginWebService + tibiaLoginWebService)
+			customWebService := []byte(propertyLoginWebService + customLoginWebService)
+
+			if len(customWebService) < len(originalWebService) {
+				customWebService = append(customWebService, bytes.Repeat([]byte{0x20}, len(originalWebService)-len(customWebService))...)
+			}
+
+			tibiaBinary = bytes.Replace(tibiaBinary, originalWebService, customWebService, 1)
 			fmt.Printf("[INFO] Tibia Login WebService found! %s\n", tibiaLoginWebService)
 			fmt.Printf("[PATCH] Tibia Login WebService replaced to %s!\n", customLoginWebService)
 			replaced = true

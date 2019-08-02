@@ -6,14 +6,15 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
-const bytePadding = 20
+var endByte = []byte{0x0d, 0x0a}
+var paddingByte = []byte{0x20}
+
+const propertyTutorialProgressWebService = "tutorialProgressWebService="
 const propertyLoginWebService = "loginWebService="
-const tibiaLoginWebService1 = "https://www.tibia.com/services/clientservices.php"
-const tibiaLoginWebService2 = "https://secure.tibia.com/services/clientservices.php"
-const tibiaLoginWebService3 = "https://secure.tibia.com/services/login.php"
 
 func main() {
 	var currentExecutable, tibiaExe, customLoginWebService string
@@ -22,17 +23,14 @@ func main() {
 	args := os.Args
 	if len(args) > 0 {
 		currentExecutable = args[0]
-		fmt.Println(currentExecutable)
 	}
 
 	if len(args) > 1 {
 		tibiaExe = args[1]
-		fmt.Println(tibiaExe)
 	}
 
 	if len(args) > 2 {
 		customLoginWebService = args[2]
-		fmt.Println(customLoginWebService)
 	}
 
 	if currentExecutable == "" || tibiaExe == "" || customLoginWebService == "" {
@@ -69,25 +67,30 @@ func main() {
 
 	fmt.Printf("[INFO] Searching for Login WebService... \n")
 	var replaced bool
-	for _, tibiaLoginWebService := range []string{tibiaLoginWebService1, tibiaLoginWebService2, tibiaLoginWebService3} {
-		if propertyIndex := bytes.IndexAny(tibiaBinary, fmt.Sprintf("%s%s", propertyLoginWebService, tibiaLoginWebService)); propertyIndex != -1 {
-			if len(customLoginWebService) > len(tibiaLoginWebService) {
-				fmt.Printf("[ERROR] Cannot replace %s to %s, because the new loginWebService length is greater then %d.\n", tibiaLoginWebService, customLoginWebService, len(tibiaLoginWebService))
+
+	if loginPropertyIndex := bytes.Index(tibiaBinary, []byte(propertyLoginWebService)); loginPropertyIndex != -1 {
+		if tutorialPropertyIndex := bytes.Index(tibiaBinary, []byte(propertyTutorialProgressWebService)); tutorialPropertyIndex != -1 {
+			loginPropertyIndex = loginPropertyIndex + len(propertyLoginWebService)
+			webServiceMaxLength := tutorialPropertyIndex - loginPropertyIndex - 2
+
+			if len(customLoginWebService) > webServiceMaxLength {
+				fmt.Printf("[ERROR] Cannot replace webserivce to %s, because the new loginWebService length is greater then %d.\n", customLoginWebService, webServiceMaxLength)
 				os.Exit(1)
 			}
 
-			originalWebService := []byte(propertyLoginWebService + tibiaLoginWebService)
-			customWebService := []byte(propertyLoginWebService + customLoginWebService)
+			oldCustomWebService := tibiaBinary[loginPropertyIndex : loginPropertyIndex+webServiceMaxLength]
+			fmt.Printf("[INFO] Tibia Login WebService found! %s\n", strings.TrimSpace(string(oldCustomWebService)))
 
-			if len(customWebService) < len(originalWebService) {
-				customWebService = append(customWebService, bytes.Repeat([]byte{0x20}, len(originalWebService)-len(customWebService))...)
-			}
+			customWebService := []byte(customLoginWebService)
+			customWebService = append(customWebService, bytes.Repeat(paddingByte, webServiceMaxLength-len(customLoginWebService))...)
+			customWebService = append(customWebService, endByte...)
 
-			tibiaBinary = bytes.Replace(tibiaBinary, originalWebService, customWebService, 1)
-			fmt.Printf("[INFO] Tibia Login WebService found! %s\n", tibiaLoginWebService)
+			rest := tibiaBinary[tutorialPropertyIndex:]
+			tibiaBinary = append(tibiaBinary[:loginPropertyIndex], customWebService...)
+			tibiaBinary = append(tibiaBinary, rest...)
+
 			fmt.Printf("[PATCH] Tibia Login WebService replaced to %s!\n", customLoginWebService)
 			replaced = true
-			break
 		}
 	}
 

@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-var NEWLINE = []byte{0x0a}
-var SPACE = []byte{0x20}
+var newLineByte = []byte{0x0a}
+var paddingByte = []byte{0x20}
 
 const propertyLoginWebService = "loginWebService="
 const propertyClientWebService = "clientWebService="
@@ -70,13 +70,13 @@ func main() {
 	var replaced bool
 
 	// Find in the binary where we have these properties
-	var loginPropertyIndex = bytes.Index(tibiaBinary, []byte(propertyLoginWebService));
-	var clientPropertyIndex = bytes.Index(tibiaBinary, []byte(propertyClientWebService)); 
+	var loginPropertyIndex = bytes.Index(tibiaBinary, []byte(propertyLoginWebService))
+	var clientPropertyIndex = bytes.Index(tibiaBinary, []byte(propertyClientWebService))
 
 	if loginPropertyIndex != -1 {
 		// Extract current login web service
-		var startLoginWebServiceValue = loginPropertyIndex + len(propertyLoginWebService);
-		var endLoginWebServiceValue = startLoginWebServiceValue + bytes.Index(tibiaBinary[startLoginWebServiceValue:], NEWLINE)
+		var startLoginWebServiceValue = loginPropertyIndex + len(propertyLoginWebService)
+		var endLoginWebServiceValue = startLoginWebServiceValue + bytes.Index(tibiaBinary[startLoginWebServiceValue:], newLineByte)
 		var loginWebServiceValue = string(tibiaBinary[startLoginWebServiceValue:endLoginWebServiceValue])
 
 		if len(customLoginWebService) > len(loginWebServiceValue) {
@@ -86,10 +86,9 @@ func main() {
 
 		fmt.Printf("[INFO] Tibia Login WebService found! %s\n", loginWebServiceValue)
 
-		
 		// Create the new services with the correct length
 		var customWebService = []byte(customLoginWebService)
-		var paddedCustomLoginWebService = append(customWebService, bytes.Repeat(SPACE, len(loginWebServiceValue) - len(customLoginWebService))...)
+		var paddedCustomLoginWebService = append(customWebService, bytes.Repeat(paddingByte, len(loginWebServiceValue)-len(customLoginWebService))...)
 
 		// Merge everything back to the client
 		remainingOfBinary := tibiaBinary[endLoginWebServiceValue:]
@@ -103,15 +102,15 @@ func main() {
 		}
 
 		fmt.Printf("[PATCH] Tibia Login WebService replaced to %s!\n", customLoginWebService)
-		replaced = true			
+		replaced = true
 	} else {
 		fmt.Printf("[WARNING] Tibia Login WebService was not found! \n")
 	}
-	
+
 	if clientPropertyIndex != -1 {
 		// Extract current client web service
-		var startClientWebServiceValue = clientPropertyIndex + len(propertyClientWebService); 
-		var endClientWebServiceValue = startClientWebServiceValue + bytes.Index(tibiaBinary[startClientWebServiceValue:], NEWLINE)
+		var startClientWebServiceValue = clientPropertyIndex + len(propertyClientWebService)
+		var endClientWebServiceValue = startClientWebServiceValue + bytes.Index(tibiaBinary[startClientWebServiceValue:], newLineByte)
 		var clientWebServiceValue = string(tibiaBinary[startClientWebServiceValue:endClientWebServiceValue])
 
 		if len(customLoginWebService) > len(clientWebServiceValue) {
@@ -121,11 +120,9 @@ func main() {
 
 		fmt.Printf("[INFO] Tibia Client WebService found! %s\n", clientWebServiceValue)
 
-
 		// Create the new services with the correct length
 		var customWebService = []byte(customLoginWebService)
-		var paddedCustomClientWebService = append(customWebService, bytes.Repeat(SPACE, len(clientWebServiceValue) - len(customLoginWebService))...)
-
+		var paddedCustomClientWebService = append(customWebService, bytes.Repeat(paddingByte, len(clientWebServiceValue)-len(customLoginWebService))...)
 
 		// Merge everything back to the client
 		remainingOfBinary := tibiaBinary[endClientWebServiceValue:]
@@ -139,7 +136,7 @@ func main() {
 		}
 
 		fmt.Printf("[PATCH] Tibia Client WebService replaced to %s!\n", customLoginWebService)
-		replaced = true			
+		replaced = true
 	} else {
 		fmt.Printf("[WARNING] Tibia Client WebService was not found! Your client version might not require it. \n")
 	}

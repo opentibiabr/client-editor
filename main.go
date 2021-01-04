@@ -6,15 +6,14 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
-var endByte = []byte{0x0d, 0x0a}
-var paddingByte = []byte{0x20}
+var NEWLINE = []byte{0x0a}
+var SPACE = []byte{0x20}
 
-const propertyTutorialProgressWebService = "tutorialProgressWebService="
 const propertyLoginWebService = "loginWebService="
+const propertyClientWebService = "clientWebService="
 
 func main() {
 	var currentExecutable, tibiaExe, customLoginWebService string
@@ -39,6 +38,8 @@ func main() {
 	}
 
 	tibiaPath, tibiaBinary := readFile(tibiaExe)
+	var originalBinarySize = len(tibiaBinary)
+
 	_, tibiaRsa := readFile("tibia_rsa.key")
 	_, otservRsa := readFile("otserv_rsa.key")
 
@@ -68,34 +69,83 @@ func main() {
 	fmt.Printf("[INFO] Searching for Login WebService... \n")
 	var replaced bool
 
-	if loginPropertyIndex := bytes.Index(tibiaBinary, []byte(propertyLoginWebService)); loginPropertyIndex != -1 {
-		if tutorialPropertyIndex := bytes.Index(tibiaBinary, []byte(propertyTutorialProgressWebService)); tutorialPropertyIndex != -1 {
-			loginPropertyIndex = loginPropertyIndex + len(propertyLoginWebService)
-			webServiceMaxLength := tutorialPropertyIndex - loginPropertyIndex - 2
+	// Find in the binary where we have these properties
+	var loginPropertyIndex = bytes.Index(tibiaBinary, []byte(propertyLoginWebService));
+	var clientPropertyIndex = bytes.Index(tibiaBinary, []byte(propertyClientWebService)); 
 
-			if len(customLoginWebService) > webServiceMaxLength {
-				fmt.Printf("[ERROR] Cannot replace webserivce to %s, because the new loginWebService length is greater then %d.\n", customLoginWebService, webServiceMaxLength)
-				os.Exit(1)
-			}
+	if loginPropertyIndex != -1 {
+		// Extract current login web service
+		var startLoginWebServiceValue = loginPropertyIndex + len(propertyLoginWebService);
+		var endLoginWebServiceValue = startLoginWebServiceValue + bytes.Index(tibiaBinary[startLoginWebServiceValue:], NEWLINE)
+		var loginWebServiceValue = string(tibiaBinary[startLoginWebServiceValue:endLoginWebServiceValue])
 
-			oldCustomWebService := tibiaBinary[loginPropertyIndex : loginPropertyIndex+webServiceMaxLength]
-			fmt.Printf("[INFO] Tibia Login WebService found! %s\n", strings.TrimSpace(string(oldCustomWebService)))
-
-			customWebService := []byte(customLoginWebService)
-			customWebService = append(customWebService, bytes.Repeat(paddingByte, webServiceMaxLength-len(customLoginWebService))...)
-			customWebService = append(customWebService, endByte...)
-
-			rest := tibiaBinary[tutorialPropertyIndex:]
-			tibiaBinary = append(tibiaBinary[:loginPropertyIndex], customWebService...)
-			tibiaBinary = append(tibiaBinary, rest...)
-
-			fmt.Printf("[PATCH] Tibia Login WebService replaced to %s!\n", customLoginWebService)
-			replaced = true
+		if len(customLoginWebService) > len(loginWebServiceValue) {
+			fmt.Printf("[ERROR] Cannot replace webservice to %s, because the new loginWebService must be smaller than '%s' (%d chars).\n", customLoginWebService, loginWebServiceValue, len(loginWebServiceValue))
+			os.Exit(1)
 		}
+
+		fmt.Printf("[INFO] Tibia Login WebService found! %s\n", loginWebServiceValue)
+
+		
+		// Create the new services with the correct length
+		var customWebService = []byte(customLoginWebService)
+		var paddedCustomLoginWebService = append(customWebService, bytes.Repeat(SPACE, len(loginWebServiceValue) - len(customLoginWebService))...)
+
+		// Merge everything back to the client
+		remainingOfBinary := tibiaBinary[endLoginWebServiceValue:]
+
+		tibiaBinary = append(tibiaBinary[:startLoginWebServiceValue], paddedCustomLoginWebService...)
+		tibiaBinary = append(tibiaBinary, remainingOfBinary...)
+
+		if originalBinarySize != len(tibiaBinary) {
+			fmt.Printf("[ERROR] Fatal error: The new modified client (size %d) has different bytesize from the original (size %d). Make sure to use the correct versions of both the client and client-editor or report a bug\n")
+			os.Exit(1)
+		}
+
+		fmt.Printf("[PATCH] Tibia Login WebService replaced to %s!\n", customLoginWebService)
+		replaced = true			
+	} else {
+		fmt.Printf("[WARNING] Tibia Login WebService was not found! \n")
+	}
+	
+	if clientPropertyIndex != -1 {
+		// Extract current client web service
+		var startClientWebServiceValue = clientPropertyIndex + len(propertyClientWebService); 
+		var endClientWebServiceValue = startClientWebServiceValue + bytes.Index(tibiaBinary[startClientWebServiceValue:], NEWLINE)
+		var clientWebServiceValue = string(tibiaBinary[startClientWebServiceValue:endClientWebServiceValue])
+
+		if len(customLoginWebService) > len(clientWebServiceValue) {
+			fmt.Printf("[ERROR] Cannot replace webservice to %s, because the new clientWebService must be smaller than '%s' (%d chars).\n", customLoginWebService, clientWebServiceValue, len(clientWebServiceValue))
+			os.Exit(1)
+		}
+
+		fmt.Printf("[INFO] Tibia Client WebService found! %s\n", clientWebServiceValue)
+
+
+		// Create the new services with the correct length
+		var customWebService = []byte(customLoginWebService)
+		var paddedCustomClientWebService = append(customWebService, bytes.Repeat(SPACE, len(clientWebServiceValue) - len(customLoginWebService))...)
+
+
+		// Merge everything back to the client
+		remainingOfBinary := tibiaBinary[endClientWebServiceValue:]
+
+		tibiaBinary = append(tibiaBinary[:startClientWebServiceValue], paddedCustomClientWebService...)
+		tibiaBinary = append(tibiaBinary, remainingOfBinary...)
+
+		if originalBinarySize != len(tibiaBinary) {
+			fmt.Printf("[ERROR] Fatal error: The new modified client (size %d) has different bytesize from the original (size %d). Make sure to use the correct versions of both the client and client-editor or report a bug\n")
+			os.Exit(1)
+		}
+
+		fmt.Printf("[PATCH] Tibia Client WebService replaced to %s!\n", customLoginWebService)
+		replaced = true			
+	} else {
+		fmt.Printf("[WARNING] Tibia Client WebService was not found! Your client version might not require it. \n")
 	}
 
 	if !replaced {
-		fmt.Printf("[ERROR] Unable to replace Tibia Login WebService\n")
+		fmt.Printf("[ERROR] Unable to replace Tibia Login or Client WebService\n")
 		os.Exit(1)
 	}
 

@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,6 +10,8 @@ import (
 
 var newLineByte = []byte{0x0a}
 var paddingByte = []byte{0x20}
+var battleyeHex = []byte{0x8d, 0x4d, 0x80, 0x75, 0x0e, 0xe8, 0x2e, 0xc8}
+var removeBattleyeHex = []byte{0x8d, 0x4d, 0x80, 0xeb, 0x0e, 0xe8, 0x2e, 0xc8}
 
 const propertyLoginWebService = "loginWebService="
 const propertyClientWebService = "clientWebService="
@@ -48,7 +49,7 @@ func main() {
 	tibiaExeBackupFileName := filepath.Base(tibiaExeBackupPath)
 
 	fmt.Printf("[INFO] Backuping %s to %s\n", tibiaExeFileName, tibiaExeBackupFileName)
-	err = ioutil.WriteFile(tibiaExeBackupPath, tibiaBinary, 0644)
+	err = os.WriteFile(tibiaExeBackupPath, tibiaBinary, 0644)
 	if err != nil {
 		fmt.Printf("[ERROR] %s\n", err.Error())
 		os.Exit(1)
@@ -64,6 +65,17 @@ func main() {
 	} else {
 		fmt.Printf("[ERROR] Unable to find Tibia RSA\n")
 		os.Exit(1)
+	}
+
+	fmt.Printf("[INFO] Searching for Battleye... \n")
+	if bytes.Contains(tibiaBinary, battleyeHex) {
+		fmt.Printf("[INFO] Battleye found!\n")
+		tibiaBinary = bytes.Replace(tibiaBinary, battleyeHex, removeBattleyeHex, 1)
+		fmt.Printf("[PATCH] Battleye removed!\n")
+	} else if bytes.Contains(tibiaBinary, removeBattleyeHex) {
+		fmt.Printf("[WARN] Battleye already removed!\n")
+	} else {
+		fmt.Printf("[ERROR] Unable to find Battleye\n")
 	}
 
 	fmt.Printf("[INFO] Searching for Login WebService... \n")
@@ -97,7 +109,7 @@ func main() {
 		tibiaBinary = append(tibiaBinary, remainingOfBinary...)
 
 		if originalBinarySize != len(tibiaBinary) {
-			fmt.Printf("[ERROR] Fatal error: The new modified client (size %d) has different bytesize from the original (size %d). Make sure to use the correct versions of both the client and client-editor or report a bug\n")
+			fmt.Printf("[ERROR] Fatal error: The new modified client (size %d) has different bytesize from the original (size %d). Make sure to use the correct versions of both the client and client-editor or report a bug\n", len(tibiaBinary), originalBinarySize)
 			os.Exit(1)
 		}
 
@@ -131,7 +143,7 @@ func main() {
 		tibiaBinary = append(tibiaBinary, remainingOfBinary...)
 
 		if originalBinarySize != len(tibiaBinary) {
-			fmt.Printf("[ERROR] Fatal error: The new modified client (size %d) has different bytesize from the original (size %d). Make sure to use the correct versions of both the client and client-editor or report a bug\n")
+			fmt.Printf("[ERROR] Fatal error: The new modified client (size %d) has different bytesize from the original (size %d). Make sure to use the correct versions of both the client and client-editor or report a bug\n", len(tibiaBinary), originalBinarySize)
 			os.Exit(1)
 		}
 
@@ -147,7 +159,7 @@ func main() {
 	}
 
 	fmt.Printf("[PATCH] Exporting File!\n")
-	err = ioutil.WriteFile(tibiaPath, tibiaBinary, 0644)
+	err = os.WriteFile(tibiaPath, tibiaBinary, 0644)
 	if err != nil {
 		fmt.Printf("[ERROR] %s\n", err.Error())
 		os.Exit(1)
@@ -168,7 +180,7 @@ func readFile(path string) (string, []byte) {
 		os.Exit(1)
 	}
 
-	raw, err := ioutil.ReadFile(fileAbs)
+	raw, err := os.ReadFile(fileAbs)
 	if err != nil {
 		fmt.Printf("[ERROR] %s\n", err.Error())
 		os.Exit(1)

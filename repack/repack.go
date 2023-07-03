@@ -37,7 +37,7 @@ type ClientInfo struct {
 	Revision   int    `json:"revision"`
 }
 
-func repackFiles(src, dst string) error {
+func repackFiles(src, dst, platform string) error {
 	clientFilePath := filepath.Join(src, "client.json")
 	assetsFilePath := filepath.Join(src, "assets.json")
 
@@ -95,11 +95,15 @@ func repackFiles(src, dst string) error {
 
 	clientInfo.Revision++
 
-	err = saveClientInfo(filepath.Join(dst, "client.json"), clientInfo)
+	err = saveClientInfo(filepath.Join(dst, "client."+platform+".json"), clientInfo)
 	if err != nil {
 		return fmt.Errorf("failed to save updated client info: %w", err)
 	}
-	err = saveAssetsInfo(filepath.Join(dst, "assets.json"), assetsInfo)
+	err = saveAssetsInfo(filepath.Join(dst, "assets.mac.json"), assetsInfo, "mac")
+	if err != nil {
+		return fmt.Errorf("failed to save updated assets info: %w", err)
+	}
+	err = saveAssetsInfo(filepath.Join(dst, "assets.windows.json"), assetsInfo, "windows")
 	if err != nil {
 		return fmt.Errorf("failed to save updated assets info: %w", err)
 	}
@@ -227,7 +231,13 @@ func saveClientInfo(filePath string, clientInfo *ClientInfo) error {
 	return os.WriteFile(filePath, clientJSON, 0644)
 }
 
-func saveAssetsInfo(filePath string, assetsInfo *AssetsInfo) error {
+func saveAssetsInfo(filePath string, assetsInfo *AssetsInfo, platform string) error {
+	for i := range assetsInfo.Files {
+		assetsInfo.Files[i].LocalFile = assetsInfo.Files[i].URL
+		if platform == "mac" {
+			assetsInfo.Files[i].LocalFile = "Contents/Resources/" + assetsInfo.Files[i].LocalFile
+		}
+	}
 	assetsJSON, err := json.MarshalIndent(assetsInfo, "", "  ")
 	if err != nil {
 		return err
@@ -236,9 +246,9 @@ func saveAssetsInfo(filePath string, assetsInfo *AssetsInfo) error {
 	return os.WriteFile(filePath, assetsJSON, 0644)
 }
 
-func Repack(src, dst string) error {
+func Repack(src, dst, platform string) error {
 	fmt.Printf("Repacking %s into %s\n", src, dst)
-	err := repackFiles(src, dst)
+	err := repackFiles(src, dst, platform)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err)
 	}

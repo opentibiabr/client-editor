@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/schollz/progressbar/v3"
 	"github.com/ulikunitz/xz/lzma"
@@ -232,13 +233,16 @@ func saveClientInfo(filePath string, clientInfo *ClientInfo) error {
 }
 
 func saveAssetsInfo(filePath string, assetsInfo *AssetsInfo, platform string) error {
+	assetsInfoCopy := *assetsInfo
+	assetsInfoCopy.Files = make([]File, len(assetsInfo.Files))
 	for i := range assetsInfo.Files {
-		assetsInfo.Files[i].LocalFile = assetsInfo.Files[i].URL
+		assetsInfoCopy.Files[i] = assetsInfo.Files[i]
+		assetsInfoCopy.Files[i].LocalFile = strings.ReplaceAll(assetsInfoCopy.Files[i].LocalFile, "Contents/Resources/", "")
 		if platform == "mac" {
-			assetsInfo.Files[i].LocalFile = "Contents/Resources/" + assetsInfo.Files[i].LocalFile
+			assetsInfoCopy.Files[i].LocalFile = "Contents/Resources/" + assetsInfoCopy.Files[i].LocalFile
 		}
 	}
-	assetsJSON, err := json.MarshalIndent(assetsInfo, "", "  ")
+	assetsJSON, err := json.MarshalIndent(assetsInfoCopy, "", "  ")
 	if err != nil {
 		return err
 	}

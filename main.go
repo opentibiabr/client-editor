@@ -19,11 +19,18 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "client-editor",
 	Short: "Edit or repack Tibia client",
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		if configFile != "" {
+			viper.SetConfigFile(configFile)
+		}
+		if err := viper.ReadInConfig(); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	},
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "config.toml", "Path to the config file")
-
 	repackCmd := &cobra.Command{
 		Use:   "repack",
 		Short: "Repack client files",
@@ -44,13 +51,11 @@ func init() {
 	}
 	editCmd.PersistentFlags().StringVarP(&tibiaExe, "tibia-exe", "t", getDefaultTibiaExe(), "Path to Tibia executable")
 
+	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "config.toml", "Path to the config file")
 	rootCmd.AddCommand(editCmd)
-
 }
 
 func main() {
-	viper.SetConfigFile(configFile)
-
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)

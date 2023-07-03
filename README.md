@@ -42,7 +42,7 @@ Repack an existing tibia client for [use with slender-launcher](https://github.c
 
 ### Compiled Releases (Windows/Mac/Linux)
 
-https://github.com/luan/client-editor/releases
+https://github.com/opentibiabr/client-editor/releases
 
 ### How to Compile
 

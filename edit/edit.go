@@ -71,7 +71,6 @@ func Edit(tibiaExe string) {
 		ok := setPropertyByName(tibiaBinary, prop, value)
 		if !ok {
 			fmt.Printf("[ERROR] Unable to replace %s\n", prop)
-			os.Exit(1)
 		}
 	}
 
@@ -170,7 +169,7 @@ func setPropertyByName(tibiaBinary []byte, propertyName string, customValue stri
 
 		if len(customValue) > len(propertyValue) {
 			fmt.Printf("[ERROR] Cannot replace %s to '%s' because the new value must be smaller than '%s' (%d chars).\n", propertyName, customValue, propertyValue, len(propertyValue))
-			os.Exit(1)
+			return false
 		}
 
 		fmt.Printf("[INFO] %s found! %s\n", propertyName, propertyValue)

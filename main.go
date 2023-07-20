@@ -5,9 +5,9 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/elysiera/client-editor/edit"
-	"github.com/elysiera/client-editor/repack"
-	"github.com/elysiera/client-editor/win2mac"
+	"github.com/opentibiabr/client-editor/edit"
+	"github.com/opentibiabr/client-editor/repack"
+	"github.com/opentibiabr/client-editor/win2mac"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )

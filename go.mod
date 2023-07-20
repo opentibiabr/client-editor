@@ -1,4 +1,4 @@
-module github.com/elysiera/client-editor
+module github.com/opentibiabr/client-editor
 
 go 1.19
 

@@ -110,3 +110,5 @@ client-editor*
 
 # End of https://www.gitignore.io/api/go,linux,macos,windows,visualstudiocode
 
+
+config.toml

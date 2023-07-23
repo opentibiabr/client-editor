@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/opentibiabr/client-editor/appearances"
 	"github.com/opentibiabr/client-editor/edit"
 	"github.com/opentibiabr/client-editor/repack"
 	"github.com/opentibiabr/client-editor/win2mac"
@@ -13,10 +14,10 @@ import (
 )
 
 var (
-	configFile, tibiaExe string
-	srcClient, dstClient string
-	srcFile, dstFile     string
-	platform             string
+	configFile, tibiaExe, appearancesPath string
+	srcClient, dstClient                  string
+	srcFile, dstFile                      string
+	platform                              string
 )
 
 var rootCmd = &cobra.Command{
@@ -71,9 +72,19 @@ func init() {
 		},
 	}
 	editCmd.PersistentFlags().StringVarP(&tibiaExe, "tibia-exe", "t", getDefaultTibiaExe(), "Path to Tibia executable")
+	rootCmd.AddCommand(editCmd)
+
+	appearancesCmd := &cobra.Command{
+		Use:   "appearances",
+		Short: "Edit Tibia's appearances.dat",
+		Run: func(cmd *cobra.Command, args []string) {
+			appearances.Appearances(appearancesPath)
+		},
+	}
+	appearancesCmd.PersistentFlags().StringVarP(&appearancesPath, "appearances", "a", "", "Path to appearances.dat")
+	rootCmd.AddCommand(appearancesCmd)
 
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "config.toml", "Path to the config file")
-	rootCmd.AddCommand(editCmd)
 }
 
 func main() {

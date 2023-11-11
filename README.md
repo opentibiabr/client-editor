@@ -40,6 +40,20 @@ Repack an existing tibia client for [use with slender-launcher](https://github.c
 ./client-editor repack -s ~/Games/Tibia-linux -d ~/src/tibia-client -p linux
 ```
 
+### Editing appearances.dat
+
+Sometimes all you want is make that one item house-wrappable. Or add use-with to something. But you don't want to have to load up asset editor since it's heavy and has a lot more features. You can use client-editor to edit appearances.dat directly.
+
+```bash
+# Windows
+.\client-editor.exe appearances -a appearances.dat -c config.toml
+
+# Unix
+./client-editor appearances -a appearances.dat -c config.toml
+```
+
+It'll write a appearances.out.dat file with the changes. You can then copy that over to your client and to the canary `data/items/` folder to have your changes applied.
+
 ### Compiled Releases (Windows/Mac/Linux)
 
 https://github.com/opentibiabr/client-editor/releases

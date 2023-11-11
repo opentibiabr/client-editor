@@ -12,3 +12,24 @@ premiumFeaturesUrl = "https://example.com/pages/vip-features"
 crashReportUrl = "https://example.com/api/crash-report"
 cipSoftUrl = "https://example.com/"
 fpsHistoryRecipient = "https://example.com/api/hardware-report"
+
+[[edit]]
+# Imbuing Crystal
+id = "24964"
+usable = true
+multiuse = true
+cyclopediaitem = {}
+
+[[edit]]
+# Teleport Box
+id = "35496"
+unmove = false
+wrap = true
+
+
+[[edit]]
+# Teleport Mirror
+id = "35501"
+unmove = false
+wrap = true
+

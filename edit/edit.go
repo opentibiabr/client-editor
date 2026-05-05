@@ -2,6 +2,7 @@ package edit
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -166,7 +167,19 @@ func removeBattlEye(tibiaPath string, tibiaBinary []byte) []byte {
 }
 
 func isWindowsExecutable(_ string, tibiaBinary []byte) bool {
-	return len(tibiaBinary) >= 2 && tibiaBinary[0] == 'M' && tibiaBinary[1] == 'Z'
+	if len(tibiaBinary) < 0x40 || tibiaBinary[0] != 'M' || tibiaBinary[1] != 'Z' {
+		return false
+	}
+
+	peOffset := int(binary.LittleEndian.Uint32(tibiaBinary[0x3c:0x40]))
+	if peOffset < 0 || peOffset+4 > len(tibiaBinary) {
+		return false
+	}
+
+	return tibiaBinary[peOffset] == 'P' &&
+		tibiaBinary[peOffset+1] == 'E' &&
+		tibiaBinary[peOffset+2] == 0x00 &&
+		tibiaBinary[peOffset+3] == 0x00
 }
 
 func hasAppliedBattlEyePatch(tibiaBinary []byte) bool {

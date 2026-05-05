@@ -165,10 +165,7 @@ func removeBattlEye(tibiaPath string, tibiaBinary []byte) []byte {
 	return tibiaBinary
 }
 
-func isWindowsExecutable(tibiaPath string, tibiaBinary []byte) bool {
-	if filepath.Ext(tibiaPath) == ".exe" {
-		return true
-	}
+func isWindowsExecutable(_ string, tibiaBinary []byte) bool {
 	return len(tibiaBinary) >= 2 && tibiaBinary[0] == 'M' && tibiaBinary[1] == 'Z'
 }
 

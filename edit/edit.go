@@ -2,6 +2,7 @@ package edit
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,8 +31,26 @@ var (
 )
 
 var paddingByte = []byte{0x20}
-var battleyeHex = []byte{0x8d, 0x4d, 0xb4, 0x75, 0x0e, 0xe8, 0xb4, 0x53}
-var removeBattleyeHex = []byte{0x8d, 0x4d, 0xb4, 0xeb, 0x0e, 0xe8, 0xb4, 0x53}
+
+type battleyePatch struct {
+	from []byte
+	to   []byte
+}
+
+var battleyePatches = []battleyePatch{
+	{
+		from: []byte{0x8d, 0x4d, 0xb4, 0x75, 0x0e, 0xe8, 0xb4, 0x53},
+		to:   []byte{0x8d, 0x4d, 0xb4, 0xeb, 0x0e, 0xe8, 0xb4, 0x53},
+	},
+	{
+		from: []byte{0x75, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48},
+		to:   []byte{0xeb, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48},
+	},
+	{
+		from: []byte{0x75, 0x0f, 0xe8, 0xd9, 0xd4, 0xed, 0xff, 0x48},
+		to:   []byte{0xeb, 0x0f, 0xe8, 0xd9, 0xd4, 0xed, 0xff, 0x48},
+	},
+}
 
 func Edit(tibiaExe string) {
 	err := viper.ReadInConfig()
@@ -65,7 +84,7 @@ func Edit(tibiaExe string) {
 	backupTibiaExecutable(tibiaPath, tibiaBinary)
 
 	tibiaBinary = replaceTibiaRSAKey(tibiaBinary)
-	tibiaBinary = removeBattlEye(tibiaBinary)
+	tibiaBinary = removeBattlEye(tibiaPath, tibiaBinary)
 
 	for prop, value := range configValues {
 		ok := setPropertyByName(tibiaBinary, prop, value)
@@ -114,20 +133,62 @@ func replaceTibiaRSAKey(tibiaBinary []byte) []byte {
 	return tibiaBinary
 }
 
-func removeBattlEye(tibiaBinary []byte) []byte {
-	fmt.Printf("[INFO] Searching for Battleye... \n")
-
-	if bytes.Contains(tibiaBinary, battleyeHex) {
-		fmt.Printf("[INFO] Battleye found!\n")
-		tibiaBinary = bytes.Replace(tibiaBinary, battleyeHex, removeBattleyeHex, 1)
-		fmt.Printf("[PATCH] Battleye removed!\n")
-	} else if bytes.Contains(tibiaBinary, removeBattleyeHex) {
-		fmt.Printf("[WARN] Battleye already removed!\n")
-	} else {
-		fmt.Printf("[WARN] Battleye not found\n")
+func removeBattlEye(tibiaPath string, tibiaBinary []byte) []byte {
+	if !isWindowsExecutable(tibiaPath, tibiaBinary) {
+		fmt.Printf("[WARN] Battleye patch skipped because the client is not a Windows executable\n")
+		return tibiaBinary
 	}
 
+	fmt.Printf("[INFO] Searching for Battleye... \n")
+
+	patchesApplied := 0
+	for _, patch := range battleyePatches {
+		count := bytes.Count(tibiaBinary, patch.from)
+		if count == 0 {
+			continue
+		}
+		tibiaBinary = bytes.ReplaceAll(tibiaBinary, patch.from, patch.to)
+		patchesApplied += count
+	}
+
+	if patchesApplied > 0 {
+		fmt.Printf("[INFO] Battleye found!\n")
+		fmt.Printf("[PATCH] Battleye removed! Applied %d patch(es)\n", patchesApplied)
+		return tibiaBinary
+	}
+
+	if hasAppliedBattlEyePatch(tibiaBinary) {
+		fmt.Printf("[WARN] Battleye already removed!\n")
+		return tibiaBinary
+	}
+
+	fmt.Printf("[WARN] Battleye not found\n")
 	return tibiaBinary
+}
+
+func isWindowsExecutable(_ string, tibiaBinary []byte) bool {
+	if len(tibiaBinary) < 0x40 || tibiaBinary[0] != 'M' || tibiaBinary[1] != 'Z' {
+		return false
+	}
+
+	peOffset := int(binary.LittleEndian.Uint32(tibiaBinary[0x3c:0x40]))
+	if peOffset < 0 || peOffset+4 > len(tibiaBinary) {
+		return false
+	}
+
+	return tibiaBinary[peOffset] == 'P' &&
+		tibiaBinary[peOffset+1] == 'E' &&
+		tibiaBinary[peOffset+2] == 0x00 &&
+		tibiaBinary[peOffset+3] == 0x00
+}
+
+func hasAppliedBattlEyePatch(tibiaBinary []byte) bool {
+	for _, patch := range battleyePatches {
+		if bytes.Contains(tibiaBinary, patch.to) {
+			return true
+		}
+	}
+	return false
 }
 
 func exportModifiedFile(tibiaPath string, tibiaBinary []byte, originalBinarySize int) {

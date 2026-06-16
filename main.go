@@ -18,12 +18,21 @@ var (
 	srcClient, dstClient                  string
 	srcFile, dstFile                      string
 	platform                              string
+	compareTibiaExe                       string
+	strictEditClientCheck                 bool
+	aggressiveEditClientCheck             bool
+	sourceTibiaExe                        string
+	strictDiagnoseClientCheck             bool
 )
 
 var rootCmd = &cobra.Command{
 	Use:   "client-editor",
 	Short: "Edit or repack Tibia client",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		switch cmd.Name() {
+		case "diagnose", "repack", "win2mac":
+			return
+		}
 		if configFile != "" {
 			viper.SetConfigFile(configFile)
 		}
@@ -68,11 +77,34 @@ func init() {
 		Use:   "edit",
 		Short: "Edit Tibia binary",
 		Run: func(cmd *cobra.Command, args []string) {
-			edit.Edit(tibiaExe)
+			edit.Edit(tibiaExe, sourceTibiaExe, strictEditClientCheck, aggressiveEditClientCheck)
 		},
 	}
 	editCmd.PersistentFlags().StringVarP(&tibiaExe, "tibia-exe", "t", getDefaultTibiaExe(), "Path to Tibia executable")
+	editCmd.PersistentFlags().StringVar(&sourceTibiaExe, "source-exe", "", "Optional pristine source executable to use as input; defaults to \"client - original.exe\" beside --tibia-exe when present")
+	editCmd.PersistentFlags().BoolVar(&aggressiveEditClientCheck, "aggressive", false, "Also rewrite high-risk client-check dispatch signatures (experimental; keep backup and manual verify)")
+	editCmd.PersistentFlags().BoolVar(&strictEditClientCheck, "strict", false, "Fail before export when client-check compatibility is partial, warning, or unsupported")
+	editCmd.PersistentFlags().BoolVar(&strictEditClientCheck, "fail-on-partial", false, "Alias for --strict")
+	editCmd.PersistentFlags().BoolVar(&strictEditClientCheck, "fail-on-unsupported-client-check", false, "Alias for --strict")
+	editCmd.PersistentFlags().BoolVar(&strictEditClientCheck, "fail-on-partial-client-check-patch", false, "Deprecated alias for --strict")
+	_ = editCmd.PersistentFlags().MarkDeprecated("fail-on-partial-client-check-patch", "use --strict")
 	rootCmd.AddCommand(editCmd)
+
+	diagnoseCmd := &cobra.Command{
+		Use:   "diagnose",
+		Short: "Diagnose Tibia binary patch compatibility",
+		Run: func(cmd *cobra.Command, args []string) {
+			edit.Diagnose(tibiaExe, compareTibiaExe, strictDiagnoseClientCheck)
+		},
+	}
+	diagnoseCmd.PersistentFlags().StringVarP(&tibiaExe, "tibia-exe", "t", getDefaultTibiaExe(), "Path to Tibia executable")
+	diagnoseCmd.PersistentFlags().StringVar(&compareTibiaExe, "compare-with", "", "Path to a known-good older Tibia executable for comparative diagnosis")
+	diagnoseCmd.PersistentFlags().BoolVar(&strictDiagnoseClientCheck, "strict", false, "Exit with an error when client-check compatibility is partial, warning, or unsupported")
+	diagnoseCmd.PersistentFlags().BoolVar(&strictDiagnoseClientCheck, "fail-on-partial", false, "Alias for --strict")
+	diagnoseCmd.PersistentFlags().BoolVar(&strictDiagnoseClientCheck, "fail-on-unsupported-client-check", false, "Alias for --strict")
+	diagnoseCmd.PersistentFlags().BoolVar(&strictDiagnoseClientCheck, "fail-on-partial-client-check-patch", false, "Deprecated alias for --strict")
+	_ = diagnoseCmd.PersistentFlags().MarkDeprecated("fail-on-partial-client-check-patch", "use --strict")
+	rootCmd.AddCommand(diagnoseCmd)
 
 	appearancesCmd := &cobra.Command{
 		Use:   "appearances",

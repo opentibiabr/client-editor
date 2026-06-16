@@ -13,7 +13,7 @@ func TestRemoveBattlEyeAppliesAllKnownWindowsPatches(t *testing.T) {
 	tibiaBinary = append(tibiaBinary, []byte{0x75, 0x0f, 0xe8, 0xd9, 0xd4, 0xed, 0xff, 0x48}...)
 	tibiaBinary = append(tibiaBinary, []byte{0x75, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48}...)
 
-	patched := removeBattlEye("client.exe", tibiaBinary)
+	patched := removeBattlEye("client.exe", tibiaBinary, false)
 
 	if bytes.Contains(patched, []byte{0x8d, 0x4d, 0xb4, 0x75, 0x0e, 0xe8, 0xb4, 0x53}) {
 		t.Fatal("expected legacy Battleye bytes to be patched")
@@ -40,7 +40,7 @@ func TestRemoveBattlEyeSkipsNonWindowsExecutable(t *testing.T) {
 	tibiaBinary = append(tibiaBinary, []byte{0x75, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48}...)
 	original := append([]byte(nil), tibiaBinary...)
 
-	patched := removeBattlEye("client.exe", tibiaBinary)
+	patched := removeBattlEye("client.exe", tibiaBinary, false)
 
 	if !bytes.Equal(patched, original) {
 		t.Fatal("expected non-Windows executable to be unchanged")
@@ -52,7 +52,7 @@ func TestRemoveBattlEyeSkipsMZWithoutPESignature(t *testing.T) {
 	tibiaBinary = append(tibiaBinary, []byte{0x75, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48}...)
 	original := append([]byte(nil), tibiaBinary...)
 
-	patched := removeBattlEye("client.exe", tibiaBinary)
+	patched := removeBattlEye("client.exe", tibiaBinary, false)
 
 	if !bytes.Equal(patched, original) {
 		t.Fatal("expected MZ-only executable to be unchanged")
@@ -136,6 +136,104 @@ func TestHighRiskDiagnosticSignatureChangesPatchedVerdict(t *testing.T) {
 	if diagnosis.clientCheckVerdict() != "WARNING: high risk of client-check remaining after known patch" {
 		t.Fatalf("expected high-risk diagnostic signature to change verdict, got %q", diagnosis.clientCheckVerdict())
 	}
+}
+
+func TestUpdateConfigINIContentSyncsWithEmbeddedClientConfig(t *testing.T) {
+	embeddedConfig := mustParseEmbeddedConfigINI(t, []byte("[URLS]\r\nloginWebService=http://127.0.0.1/login.php\r\nclientWebService=http://127.0.0.1/client.php\r\n[SOUND]\r\nfailInitialization=false\r\n"))
+	configData := []byte("; keep this comment\r\nunknownKey=keep\r\nloginWebService = old\r\n")
+
+	updated, changedCount, addedCount, removedCount, changed := updateConfigINIContent(configData, embeddedConfig)
+
+	expected := "; keep this comment\r\nunknownKey=keep\r\nloginWebService = old\r\n\r\n[URLS]\r\nloginWebService=http://127.0.0.1/login.php\r\nclientWebService=http://127.0.0.1/client.php\r\n\r\n[SOUND]\r\nfailInitialization=false\r\n"
+	if !changed {
+		t.Fatal("expected config.ini content to change")
+	}
+	if changedCount != 0 {
+		t.Fatalf("expected no managed section key updates, got %d", changedCount)
+	}
+	if addedCount != 3 {
+		t.Fatalf("expected three missing embedded keys to be appended, got %d", addedCount)
+	}
+	if removedCount != 0 {
+		t.Fatalf("expected no obsolete managed keys to be removed, got %d", removedCount)
+	}
+	if string(updated) != expected {
+		t.Fatalf("unexpected config.ini content:\n%s", string(updated))
+	}
+}
+
+func TestUpdateConfigINIContentKeepsUpToDateContentUnchanged(t *testing.T) {
+	embeddedConfig := mustParseEmbeddedConfigINI(t, []byte("[URLS]\nloginWebService=http://127.0.0.1/login.php\n"))
+	configData := []byte("[URLS]\nloginWebService=http://127.0.0.1/login.php\n[LOCAL]\nunknownKey=keep\n")
+
+	updated, changedCount, addedCount, removedCount, changed := updateConfigINIContent(configData, embeddedConfig)
+
+	if changed {
+		t.Fatal("expected up-to-date config.ini content to stay unchanged")
+	}
+	if changedCount != 0 || addedCount != 0 || removedCount != 0 {
+		t.Fatalf("expected zero changes, got changed=%d added=%d removed=%d", changedCount, addedCount, removedCount)
+	}
+	if !bytes.Equal(updated, configData) {
+		t.Fatal("expected original config.ini bytes to be preserved")
+	}
+}
+
+func TestUpdateConfigINIContentUpdatesAndRemovesManagedSectionKeys(t *testing.T) {
+	embeddedConfig := mustParseEmbeddedConfigINI(t, []byte("[URLS]\nloginWebService=http://127.0.0.1/login.php\nclientWebService=http://127.0.0.1/client.php\n"))
+	configData := []byte("[URLS]\nloginWebService=old\ncreateTournamentCharacterUrl=obsolete\n")
+
+	updated, changedCount, addedCount, removedCount, changed := updateConfigINIContent(configData, embeddedConfig)
+
+	expected := "[URLS]\nloginWebService=http://127.0.0.1/login.php\nclientWebService=http://127.0.0.1/client.php\n"
+	if !changed {
+		t.Fatal("expected managed config.ini section to be updated")
+	}
+	if changedCount != 1 {
+		t.Fatalf("expected one outdated value, got %d", changedCount)
+	}
+	if addedCount != 1 {
+		t.Fatalf("expected one new key, got %d", addedCount)
+	}
+	if removedCount != 1 {
+		t.Fatalf("expected one obsolete key to be removed, got %d", removedCount)
+	}
+	if string(updated) != expected {
+		t.Fatalf("unexpected config.ini content:\n%s", string(updated))
+	}
+}
+
+func TestUpdateConfigINIContentCreatesOrderedSectionsFromEmbeddedConfig(t *testing.T) {
+	embeddedConfig := mustParseEmbeddedConfigINI(t, []byte("[URLS]\nloginWebService=http://127.0.0.1/login.php\nclientWebService=http://127.0.0.1/client.php\n[SOUND]\nfailInitialization=false\n"))
+
+	updated, changedCount, addedCount, removedCount, changed := updateConfigINIContent(nil, embeddedConfig)
+
+	expected := "[URLS]\nloginWebService=http://127.0.0.1/login.php\nclientWebService=http://127.0.0.1/client.php\n\n[SOUND]\nfailInitialization=false\n"
+	if !changed {
+		t.Fatal("expected empty config.ini content to be created")
+	}
+	if changedCount != 0 {
+		t.Fatalf("expected no outdated values, got %d", changedCount)
+	}
+	if addedCount != 3 {
+		t.Fatalf("expected three new keys, got %d", addedCount)
+	}
+	if removedCount != 0 {
+		t.Fatalf("expected no obsolete keys, got %d", removedCount)
+	}
+	if string(updated) != expected {
+		t.Fatalf("unexpected config.ini content:\n%s", string(updated))
+	}
+}
+
+func mustParseEmbeddedConfigINI(t *testing.T, configData []byte) embeddedConfigINI {
+	t.Helper()
+
+	embeddedConfig, ok := parseEmbeddedConfigINI(configData)
+	if !ok {
+		t.Fatal("expected embedded config.ini block to parse")
+	}
+	return embeddedConfig
 }
 
 func newPEBinary() []byte {

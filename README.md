@@ -24,6 +24,8 @@ For a local client using [SlenderAAC](https://github.com/luan/slenderaac) you ca
 ./client-editor edit -t <tibia.exe location> -c local.toml
 ```
 
+The `edit` command also keeps the client-side `config.ini` in sync with the embedded INI block from the source client executable. The tool looks for the client default block starting at `[URLS]`, applies the TOML URL overrides that are also patched into the executable, writes to `conf/config.ini` when that client layout exists, and falls back to `config.ini` beside the executable otherwise. Existing comments and unknown sections are preserved. In sections managed by the embedded client config, outdated values are replaced, missing keys are appended, and obsolete keys that no longer exist in that client build are removed.
+
 ### Client-check safety
 
 By default, `edit` keeps the safe behavior: known stable BattlEye patches are applied, diagnostic-only high-risk signatures are reported, and high-risk client-check paths are not rewritten.

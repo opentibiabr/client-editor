@@ -42,6 +42,9 @@ const (
 	contextBytesRadius      = 48
 	knownPatchContextRadius = 512
 	patchContextRadius      = 32
+	configINIFileName       = "config.ini"
+	configINIDirName        = "conf"
+	configINIStartMarker    = "[URLS]"
 )
 
 type battleyePatch struct {
@@ -315,8 +318,20 @@ func Edit(tibiaExe string, sourceTibiaExe string, strictClientCheck bool, aggres
 		}
 	}
 
-	backupTibiaExecutable(tibiaPath, originalTibiaBinary, aggressiveClientCheck)
+	backupBinary := originalTibiaBinary
+	if sourcePath != tibiaExe {
+		targetBinary, err := os.ReadFile(tibiaPath)
+		if err == nil {
+			backupBinary = targetBinary
+		} else if !os.IsNotExist(err) {
+			fmt.Printf("[ERROR] Unable to read target executable for backup: %s\n", err.Error())
+			os.Exit(1)
+		}
+	}
+
+	backupTibiaExecutable(tibiaPath, backupBinary, aggressiveClientCheck)
 	exportModifiedFile(tibiaPath, tibiaBinary, originalBinarySize)
+	syncConfigINI(tibiaPath, originalTibiaBinary, configValues)
 	logEditSuccess(diagnosis, strictClientCheck)
 }
 
@@ -526,12 +541,13 @@ func isWindowsExecutable(_ string, tibiaBinary []byte) bool {
 
 func analyzeTibiaBinary(tibiaPath string, tibiaBinary []byte) diagnosisReport {
 	sum := sha256.Sum256(tibiaBinary)
+	sha256Text := fmt.Sprintf("%x", sum[:])
 	diagnosis := diagnosisReport{
 		path:          tibiaPath,
 		size:          len(tibiaBinary),
-		sha256:        fmt.Sprintf("%x", sum[:]),
+		sha256:        sha256Text,
 		isWindowsExe:  isWindowsExecutable(tibiaPath, tibiaBinary),
-		patchStatuses: scanBattlEyePatchStatus(tibiaBinary),
+		patchStatuses: scanBattlEyePatchStatus(tibiaBinary, sha256Text),
 	}
 
 	if diagnosis.isWindowsExe {
@@ -543,9 +559,7 @@ func analyzeTibiaBinary(tibiaPath string, tibiaBinary []byte) diagnosisReport {
 	return diagnosis
 }
 
-func scanBattlEyePatchStatus(tibiaBinary []byte) []battleyePatchStatus {
-	sum := sha256.Sum256(tibiaBinary)
-	sha256Text := fmt.Sprintf("%x", sum[:])
+func scanBattlEyePatchStatus(tibiaBinary []byte, sha256Text string) []battleyePatchStatus {
 	statuses := make([]battleyePatchStatus, 0, len(battleyePatches))
 	for _, patch := range battleyePatches {
 		patchedOffsets := patch.patched.findAll(tibiaBinary)
@@ -581,7 +595,7 @@ func inspectPE(tibiaBinary []byte) peInfo {
 	for _, section := range peFile.Sections {
 		rawStart := int(section.Offset)
 		rawEnd := rawStart + int(section.Size)
-		if rawStart > len(tibiaBinary) {
+		if rawStart < 0 || rawEnd < 0 || rawStart > len(tibiaBinary) {
 			continue
 		}
 		if rawEnd > len(tibiaBinary) {
@@ -1946,16 +1960,355 @@ func neutralizeBranchJumpPattern(pattern bytePattern, patch map[int]int) []int {
 
 	for index, value := range patch {
 		if index < 0 || index >= len(replacement) {
-			fmt.Printf("[ERROR] Invalid branch neutralization offset %d for pattern %d bytes\n", index, len(replacement))
-			os.Exit(1)
+			panic(fmt.Sprintf("invalid branch neutralization offset %d for pattern %d bytes", index, len(replacement)))
 		}
 		if value < 0 || value > 0xff {
-			fmt.Printf("[ERROR] Invalid branch neutralization byte %d at position %d\n", value, index)
-			os.Exit(1)
+			panic(fmt.Sprintf("invalid branch neutralization byte %d at position %d", value, index))
 		}
 		replacement[index] = value
 	}
 	return replacement
+}
+
+type configINIKeyValue struct {
+	key   string
+	value string
+}
+
+type configINISection struct {
+	name      string
+	keys      []configINIKeyValue
+	keyValues map[string]string
+}
+
+type embeddedConfigINI struct {
+	sections      []configINISection
+	sectionByName map[string]configINISection
+}
+
+func syncConfigINI(tibiaPath string, tibiaBinary []byte, configValues map[string]string) {
+	embeddedConfigData, ok := extractEmbeddedConfigINIBlock(tibiaBinary)
+	if !ok {
+		fmt.Printf("[WARN] Embedded config.ini block starting at %q was not found; %s sync skipped\n", configINIStartMarker, configINIFileName)
+		return
+	}
+
+	embeddedConfig, ok := parseEmbeddedConfigINI(embeddedConfigData)
+	if !ok {
+		fmt.Printf("[WARN] Embedded config.ini block could not be parsed; %s sync skipped\n", configINIFileName)
+		return
+	}
+	embeddedConfig = overrideEmbeddedConfigValues(embeddedConfig, configValues)
+
+	configPath, configExists := resolveConfigINIPath(tibiaPath)
+	configData := make([]byte, 0)
+	if configExists {
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			fmt.Printf("[ERROR] Unable to read %s: %s\n", configPath, err.Error())
+			os.Exit(1)
+		}
+		configData = data
+	}
+
+	updatedConfig, changedCount, addedCount, removedCount, changed := updateConfigINIContent(configData, embeddedConfig)
+	if !changed {
+		fmt.Printf("[INFO] %s already up to date\n", configINIFileName)
+		return
+	}
+
+	if err := os.WriteFile(configPath, updatedConfig, 0644); err != nil {
+		fmt.Printf("[ERROR] Unable to write %s: %s\n", configPath, err.Error())
+		os.Exit(1)
+	}
+
+	if configExists {
+		fmt.Printf("[PATCH] %s updated from embedded client config (%d outdated value(s), %d new key(s), %d obsolete key(s) removed)\n", configINIFileName, changedCount, addedCount, removedCount)
+		return
+	}
+	fmt.Printf("[PATCH] %s created from embedded client config (%d key(s))\n", configINIFileName, addedCount)
+}
+
+func resolveConfigINIPath(tibiaPath string) (string, bool) {
+	tibiaDir := filepath.Dir(tibiaPath)
+	confConfigPath := filepath.Clean(filepath.Join(tibiaDir, "..", configINIDirName, configINIFileName))
+	binConfigPath := filepath.Join(tibiaDir, configINIFileName)
+
+	for _, candidate := range []string{confConfigPath, binConfigPath} {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate, true
+		}
+	}
+
+	confDir := filepath.Dir(confConfigPath)
+	if info, err := os.Stat(confDir); err == nil && info.IsDir() {
+		return confConfigPath, false
+	}
+
+	return binConfigPath, false
+}
+
+func extractEmbeddedConfigINIBlock(tibiaBinary []byte) ([]byte, bool) {
+	start := bytes.Index(tibiaBinary, []byte(configINIStartMarker))
+	if start == -1 {
+		return nil, false
+	}
+
+	end := start
+	for end < len(tibiaBinary) {
+		value := tibiaBinary[end]
+		if value == 0 {
+			break
+		}
+		if value == '\r' || value == '\n' || value == '\t' || (value >= 0x20 && value <= 0x7e) {
+			end++
+			continue
+		}
+		break
+	}
+
+	if end <= start {
+		return nil, false
+	}
+	return tibiaBinary[start:end], true
+}
+
+func parseEmbeddedConfigINI(configData []byte) (embeddedConfigINI, bool) {
+	config := embeddedConfigINI{}
+	currentSectionIndex := -1
+	for _, line := range splitConfigINILines(configData) {
+		if sectionName, ok := parseConfigINISectionLine(line); ok {
+			config.sections = append(config.sections, configINISection{
+				name:      sectionName,
+				keyValues: make(map[string]string),
+			})
+			currentSectionIndex = len(config.sections) - 1
+			continue
+		}
+
+		if currentSectionIndex == -1 {
+			continue
+		}
+
+		key, value, ok := splitConfigINILine(line)
+		if !ok {
+			continue
+		}
+
+		section := &config.sections[currentSectionIndex]
+		if _, exists := section.keyValues[key]; exists {
+			continue
+		}
+		section.keys = append(section.keys, configINIKeyValue{key: key, value: value})
+		section.keyValues[key] = value
+	}
+
+	totalKeys := 0
+	config.sectionByName = make(map[string]configINISection, len(config.sections))
+	for _, section := range config.sections {
+		config.sectionByName[section.name] = section
+		totalKeys += len(section.keys)
+	}
+
+	return config, totalKeys > 0
+}
+
+func overrideEmbeddedConfigValues(embeddedConfig embeddedConfigINI, configValues map[string]string) embeddedConfigINI {
+	for sectionIndex := range embeddedConfig.sections {
+		section := &embeddedConfig.sections[sectionIndex]
+		for keyIndex := range section.keys {
+			value, ok := configValues[section.keys[keyIndex].key]
+			if !ok {
+				continue
+			}
+
+			section.keys[keyIndex].value = value
+			section.keyValues[section.keys[keyIndex].key] = value
+		}
+	}
+
+	embeddedConfig.sectionByName = make(map[string]configINISection, len(embeddedConfig.sections))
+	for _, section := range embeddedConfig.sections {
+		embeddedConfig.sectionByName[section.name] = section
+	}
+	return embeddedConfig
+}
+
+func updateConfigINIContent(configData []byte, embeddedConfig embeddedConfigINI) ([]byte, int, int, int, bool) {
+	lineEnding := detectLineEnding(configData)
+	if len(configData) == 0 {
+		return renderEmbeddedConfigINI(embeddedConfig, lineEnding), 0, embeddedConfigKeyCount(embeddedConfig), 0, true
+	}
+
+	lines := splitConfigINILines(configData)
+	output := make([]string, 0, len(lines)+embeddedConfigKeyCount(embeddedConfig))
+	seenSections := make(map[string]struct{}, len(embeddedConfig.sections))
+	seenKeys := make(map[string]map[string]struct{}, len(embeddedConfig.sections))
+	changedCount := 0
+	addedCount := 0
+	removedCount := 0
+	currentSection := ""
+	currentManaged := false
+
+	appendMissingKeys := func(sectionName string) {
+		section, ok := embeddedConfig.sectionByName[sectionName]
+		if !ok {
+			return
+		}
+		if _, ok := seenKeys[sectionName]; !ok {
+			seenKeys[sectionName] = make(map[string]struct{}, len(section.keys))
+		}
+		for _, item := range section.keys {
+			if _, ok := seenKeys[sectionName][item.key]; ok {
+				continue
+			}
+			output = append(output, item.key+"="+item.value)
+			seenKeys[sectionName][item.key] = struct{}{}
+			addedCount++
+		}
+	}
+
+	for _, line := range lines {
+		if sectionName, ok := parseConfigINISectionLine(line); ok {
+			if currentManaged {
+				appendMissingKeys(currentSection)
+			}
+
+			currentSection = sectionName
+			_, currentManaged = embeddedConfig.sectionByName[currentSection]
+			if currentManaged {
+				seenSections[currentSection] = struct{}{}
+				if _, ok := seenKeys[currentSection]; !ok {
+					seenKeys[currentSection] = make(map[string]struct{})
+				}
+			}
+
+			output = append(output, line)
+			continue
+		}
+
+		if currentManaged {
+			key, _, ok := splitConfigINILine(line)
+			if ok {
+				section := embeddedConfig.sectionByName[currentSection]
+				value, exists := section.keyValues[key]
+				if !exists {
+					removedCount++
+					continue
+				}
+				if _, duplicate := seenKeys[currentSection][key]; duplicate {
+					removedCount++
+					continue
+				}
+
+				seenKeys[currentSection][key] = struct{}{}
+				nextLine := key + "=" + value
+				if line != nextLine {
+					output = append(output, nextLine)
+					changedCount++
+					continue
+				}
+			}
+		}
+
+		output = append(output, line)
+	}
+
+	if currentManaged {
+		appendMissingKeys(currentSection)
+	}
+
+	for _, section := range embeddedConfig.sections {
+		if _, ok := seenSections[section.name]; ok {
+			continue
+		}
+		if len(output) > 0 && strings.TrimSpace(output[len(output)-1]) != "" {
+			output = append(output, "")
+		}
+		output = append(output, "["+section.name+"]")
+		for _, item := range section.keys {
+			output = append(output, item.key+"="+item.value)
+			addedCount++
+		}
+	}
+
+	if changedCount == 0 && addedCount == 0 && removedCount == 0 {
+		return configData, 0, 0, 0, false
+	}
+
+	return []byte(strings.Join(output, lineEnding) + lineEnding), changedCount, addedCount, removedCount, true
+}
+
+func splitConfigINILines(configData []byte) []string {
+	normalized := strings.ReplaceAll(string(configData), "\r\n", "\n")
+	normalized = strings.TrimRight(normalized, "\x00")
+	normalized = strings.TrimSuffix(normalized, "\n")
+	if normalized == "" {
+		return nil
+	}
+	return strings.Split(normalized, "\n")
+}
+
+func parseConfigINISectionLine(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) < 3 || !strings.HasPrefix(trimmed, "[") || !strings.HasSuffix(trimmed, "]") {
+		return "", false
+	}
+
+	sectionName := strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+	if sectionName == "" {
+		return "", false
+	}
+	return sectionName, true
+}
+
+func renderEmbeddedConfigINI(embeddedConfig embeddedConfigINI, lineEnding string) []byte {
+	lines := make([]string, 0, embeddedConfigKeyCount(embeddedConfig)+len(embeddedConfig.sections)*2)
+	for index, section := range embeddedConfig.sections {
+		if index > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "["+section.name+"]")
+		for _, item := range section.keys {
+			lines = append(lines, item.key+"="+item.value)
+		}
+	}
+	return []byte(strings.Join(lines, lineEnding) + lineEnding)
+}
+
+func embeddedConfigKeyCount(embeddedConfig embeddedConfigINI) int {
+	total := 0
+	for _, section := range embeddedConfig.sections {
+		total += len(section.keys)
+	}
+	return total
+}
+
+func splitConfigINILine(line string) (string, string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
+		return "", "", false
+	}
+
+	separator := strings.Index(trimmed, "=")
+	if separator <= 0 {
+		return "", "", false
+	}
+
+	key := strings.TrimSpace(trimmed[:separator])
+	value := strings.TrimSpace(trimmed[separator+1:])
+	if key == "" {
+		return "", "", false
+	}
+	return key, value, true
+}
+
+func detectLineEnding(data []byte) string {
+	if bytes.Contains(data, []byte("\r\n")) {
+		return "\r\n"
+	}
+	return "\n"
 }
 
 func setPropertyByName(tibiaBinary []byte, propertyName string, customValue string) bool {

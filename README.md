@@ -24,15 +24,131 @@ For a local client using [SlenderAAC](https://github.com/luan/slenderaac) you ca
 ./client-editor edit -t <tibia.exe location> -c local.toml
 ```
 
+### Client-check safety
+
+By default, `edit` keeps the safe behavior: known stable BattlEye patches are applied, diagnostic-only high-risk signatures are reported, and high-risk client-check paths are not rewritten.
+
+The edit command refuses to export only when strong unsupported client-check evidence remains. If the verdict is `PARTIAL` or `WARNING` but strong evidence is `none`, the export is allowed and the tool prints warnings for manual validation.
+
+```bash
+# Windows
+.\client-editor.exe edit -t <new-client.exe> -c config.toml
+
+# Unix
+./client-editor edit -t <new-client> -c config.toml
+```
+
+Use `--strict` for CI, release scripts, or any workflow where `PARTIAL`, `WARNING`, or `UNSUPPORTED` support must stop the export:
+
+```bash
+# Windows
+.\client-editor.exe edit -t <new-client.exe> -c config.toml --strict
+
+# Unix
+./client-editor edit -t <new-client> -c config.toml --strict
+```
+
+When a pristine executable is available, pass it with `--source-exe`. If omitted, `edit` automatically uses `client - original.exe` beside `--tibia-exe` when that file exists.
+
+```bash
+# Windows
+.\client-editor.exe edit -t client.exe --source-exe "client - original.exe" -c local.toml
+
+# Unix
+./client-editor edit -t client --source-exe "client-original" -c local.toml
+```
+
+### Aggressive mode
+
+`--aggressive` enables optional rewriting of known high-risk client-check dispatch signatures that are diagnostic-only in safe mode. This mode is experimental and intended for manually validated clients only.
+
+- `--aggressive=false`: default behavior; high-risk signatures are reported but not rewritten.
+- `--aggressive=true`: rewrites the two high-risk paths and prints a large warning before patching. The `clientcheck_disconnected` path is neutralized by nopping its final dispatch call; the `enableClientCheck` xref wrapper is neutralized without changing its original tail jump.
+- `--strict --aggressive`: still fails the export when the final diagnosis is unsafe, even after aggressive rewriting.
+
+Aggressive signatures are version-scoped. If a newer or older client does not match the high-risk byte pattern exactly, the high-risk rewrite is skipped and only stable patchable signatures are applied. Every applied patch logs a before/after byte window covering the rewritten bytes.
+
+```bash
+# Windows
+.\client-editor.exe edit -t client.exe --source-exe "client - original.exe" -c local.toml --aggressive
+
+# Unix
+./client-editor edit -t client --source-exe "client-original" -c local.toml --aggressive
+```
+
+### Diagnose client-check compatibility
+
+Use `diagnose` to inspect a Tibia executable without modifying it. The report includes SHA256, file size, known BattlEye/client-check signature states, remaining client-check string indicators, nearby code references, and a support verdict.
+
+The report separates weak indicators, suspicious active candidates, high-risk diagnostic-only signatures, and strong unsupported evidence. `BEClient` is treated as weak because it often appears in Qt metadata. Critical strings become strong evidence only when the code reference also has nearby branch/call evidence and no known patch signature close to that context.
+
+Verdicts:
+
+- `SUPPORTED`: all known patchable signatures are covered and no strong evidence remains.
+- `PARTIAL`: only some known patchable signatures are covered.
+- `WARNING`: a known patch is applied, but suspicious or high-risk diagnostic evidence still remains.
+- `UNSUPPORTED`: strong client-check code evidence remains.
+
+`diagnose --strict` exits with an error for `PARTIAL`, `WARNING`, or `UNSUPPORTED`; plain `diagnose` only reports.
+
+```bash
+# Windows
+.\client-editor.exe diagnose -t <new-client.exe>
+
+# Unix
+./client-editor diagnose -t <new-client>
+```
+
+When running from a source checkout before building a binary, use `go run .` from the repository root:
+
+```bash
+# Windows
+go run . diagnose -t <new-client.exe>
+
+# Unix
+go run . diagnose -t <new-client>
+```
+
+Use strict mode in CI or release scripts when diagnostics should fail if compatibility is partial, warning, or unsupported:
+
+```bash
+# Windows
+.\client-editor.exe diagnose -t <new-client.exe> --strict
+
+# Unix
+./client-editor diagnose -t <new-client> --strict
+```
+
+For a useful old-vs-new comparison, pass a known-good older client with `--compare-with`:
+
+```bash
+# Windows, comparing original binaries before client-editor patches either file
+.\client-editor.exe diagnose -t <new-original-client.exe> --compare-with <old-original-client.exe>
+
+# Windows, same comparison through go run from the repository root
+go run . diagnose -t <new-original-client.exe> --compare-with <old-original-client.exe>
+
+# Windows, comparing already patched binaries after client-editor was run on both versions
+.\client-editor.exe diagnose -t <new-patched-client.exe> --compare-with <old-patched-client.exe>
+
+# Unix, comparing original binaries before client-editor patches either file
+./client-editor diagnose -t <new-original-client> --compare-with <old-original-client>
+
+# Unix, comparing already patched binaries after client-editor was run on both versions
+./client-editor diagnose -t <new-patched-client> --compare-with <old-patched-client>
+```
+
+The old client does not have to be original, but both sides should be in the same state. Compare original-vs-original when deciding whether a new version is supported before editing. Compare patched-vs-patched when diagnosing why a new patched client still behaves differently from an older patched client that works.
+
 ### Repack client
 
 Repack an existing tibia client for [use with slender-launcher](https://github.com/luan/slender-launcher). Repack requires a `client.<platform>.json` and `assets.<platform>.json` for each of the platforms you want to repack. Check out https://github.com/luan/tibia-client for an example.
 
 ```bash
 # Windows
-.\client-editor.exe repack -s C:\Games\Tibia-windows -d C:\Users\YourName\src\tibia-client -p windows
-.\client-editor.exe repack -s C:\Games\Tibia-mac -d C:\Users\YourName\src\tibia-client -p mac
-.\client-editor.exe repack -s C:\Games\Tibia-linux -d C:\Users\YourName\src\tibia-client -p linux
+.\client-editor.exe repack -s <Tibia-windows folder> -d <tibia-client output folder> -p windows
+.\client-editor.exe repack -s <Tibia-mac folder> -d <tibia-client output folder> -p mac
+.\client-editor.exe repack -s <Tibia-linux folder> -d <tibia-client output folder> -p linux
 
 # Unix
 ./client-editor repack -s ~/Games/Tibia-windows -d ~/src/tibia-client -p windows

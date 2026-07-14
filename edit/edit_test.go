@@ -21,8 +21,8 @@ func TestRemoveBattlEyeAppliesAllKnownWindowsPatches(t *testing.T) {
 	if bytes.Contains(patched, []byte{0x75, 0x0f, 0xe8, 0xd9, 0xd4, 0xed, 0xff, 0x48}) {
 		t.Fatal("expected first Battleye bytes to be patched")
 	}
-	if bytes.Contains(patched, []byte{0x75, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48}) {
-		t.Fatal("expected second Battleye bytes to be patched")
+	if !bytes.Contains(patched, []byte{0x75, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48}) {
+		t.Fatal("expected ambiguous branch bytes to remain unchanged")
 	}
 	if !bytes.Contains(patched, []byte{0x8d, 0x4d, 0xb4, 0xeb, 0x0e, 0xe8, 0xb4, 0x53}) {
 		t.Fatal("expected legacy patched Battleye bytes")
@@ -30,63 +30,96 @@ func TestRemoveBattlEyeAppliesAllKnownWindowsPatches(t *testing.T) {
 	if !bytes.Contains(patched, []byte{0xeb, 0x0f, 0xe8, 0xd9, 0xd4, 0xed, 0xff, 0x48}) {
 		t.Fatal("expected first patched Battleye bytes")
 	}
-	if !bytes.Contains(patched, []byte{0xeb, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48}) {
-		t.Fatal("expected second patched Battleye bytes")
+	if bytes.Contains(patched, []byte{0xeb, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48}) {
+		t.Fatal("expected ambiguous branch not to be rewritten")
 	}
 }
 
-func TestRemoveBattlEyeAutomaticallyAppliesVerifiedHighRiskPatch(t *testing.T) {
-	originalPatches := battleyePatches
-	t.Cleanup(func() {
-		battleyePatches = originalPatches
-	})
+func TestStructuralClientCheckPairPatchesOnlyVerifiedCallSites(t *testing.T) {
+	tibiaBinary, peData, fixture := newStructuralClientCheckFixture(t)
+	patches := structuralTestPatches(t)
+	plan := buildStructuralPatchPlan(tibiaBinary, peData, patches)
+	if !plan.verifiedGroups[structuralClientCheckGroup] {
+		t.Fatal("expected the complete structural client-check pair to verify")
+	}
 
-	const (
-		sourceSHA256 = "fixture-sha256"
-		patchOffset  = 0x90
-	)
-	battleyePatches = []battleyePatch{
+	original := append([]byte(nil), tibiaBinary...)
+	for patchIndex, patch := range patches {
+		match := plan.matches[patchIndex]
+		if !match.unique || len(match.originalOffsets) != 1 || len(match.patchedOffsets) != 0 {
+			t.Fatalf("expected one original structural match for %q, got %+v", patch.name, match)
+		}
+		tibiaBinary = applyBattleyePatch(tibiaBinary, patch, match.originalOffsets)
+	}
+
+	expectedChanges := make(map[int]bool)
+	for offset := fixture.clientCheckOffset + 93; offset <= fixture.clientCheckOffset+97; offset++ {
+		expectedChanges[offset] = true
+	}
+	for offset := fixture.enableClientCheckOffset + 18; offset <= fixture.enableClientCheckOffset+23; offset++ {
+		expectedChanges[offset] = true
+	}
+	for offset := range tibiaBinary {
+		changed := tibiaBinary[offset] != original[offset]
+		if changed != expectedChanges[offset] {
+			t.Fatalf("unexpected structural patch diff at 0x%X: before=%02X after=%02X expectedChange=%t", offset, original[offset], tibiaBinary[offset], expectedChanges[offset])
+		}
+	}
+
+	patchedPlan := buildStructuralPatchPlan(tibiaBinary, peData, patches)
+	if !patchedPlan.verifiedGroups[structuralClientCheckGroup] {
+		t.Fatal("expected the patched structural pair to remain verifiable")
+	}
+	for patchIndex, patch := range patches {
+		match := patchedPlan.matches[patchIndex]
+		if !match.unique || len(match.originalOffsets) != 0 || len(match.patchedOffsets) != 1 {
+			t.Fatalf("expected one patched structural match for %q, got %+v", patch.name, match)
+		}
+	}
+}
+
+func TestStructuralClientCheckPairRejectsWrongAnchorDuplicateAndFunctionBoundary(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func([]byte, *peInfo, structuralClientCheckFixture)
+	}{
 		{
-			name:                      "verified high-risk fixture",
-			original:                  newBytePattern("verified high-risk fixture", 0xde, 0xad, 0xbe, 0xef),
-			diagnosticOnly:            true,
-			highRiskClientCheck:       true,
-			autoPatchAtExpectedOffset: true,
-			aggressiveReplacement:     newPatchReplacement(0x90, 0x90, 0x90, 0x90),
-			expectedOffsets: []knownPatchOffset{
-				{sha256: sourceSHA256, offset: patchOffset},
+			name: "wrong semantic anchor",
+			mutate: func(tibiaBinary []byte, _ *peInfo, fixture structuralClientCheckFixture) {
+				tibiaBinary[fixture.clientCheckStringOffset] = 'X'
+			},
+		},
+		{
+			name: "duplicate clientcheck candidate",
+			mutate: func(tibiaBinary []byte, peData *peInfo, fixture structuralClientCheckFixture) {
+				const duplicateOffset = 0x400
+				populateClientCheckPattern(t, tibiaBinary, *peData, duplicateOffset, fixture)
+				duplicateRVA, _ := peData.rvaForOffset(duplicateOffset)
+				peData.runtimeFunctions = append(peData.runtimeFunctions, peRuntimeFunction{beginRVA: duplicateRVA - 0x20, endRVA: duplicateRVA + 0x80})
+			},
+		},
+		{
+			name: "enable wrapper is not an exact runtime function",
+			mutate: func(_ []byte, peData *peInfo, fixture structuralClientCheckFixture) {
+				enableRVA, _ := peData.rvaForOffset(fixture.enableClientCheckOffset)
+				for index := range peData.runtimeFunctions {
+					if peData.runtimeFunctions[index].beginRVA == enableRVA {
+						peData.runtimeFunctions[index].endRVA++
+					}
+				}
 			},
 		},
 	}
 
-	tibiaBinary := append(newPEBinary(), make([]byte, patchOffset+4-len(newPEBinary()))...)
-	copy(tibiaBinary[patchOffset:], []byte{0xde, 0xad, 0xbe, 0xef})
-
-	patched := removeBattlEyeWithSourceSHA("client.exe", tibiaBinary, false, sourceSHA256)
-	if !bytes.Equal(patched[patchOffset:patchOffset+4], []byte{0x90, 0x90, 0x90, 0x90}) {
-		t.Fatalf("expected verified high-risk signature to be patched in normal mode, got % X", patched[patchOffset:patchOffset+4])
-	}
-}
-
-func TestHighRiskAutoPatchRequiresExactHashAndUniqueExpectedOffset(t *testing.T) {
-	patch := battleyePatch{
-		autoPatchAtExpectedOffset: true,
-		expectedOffsets: []knownPatchOffset{
-			{sha256: "known-sha256", offset: 0x120},
-		},
-	}
-
-	if !patch.canAutoPatchAtExpectedOffset("known-sha256", []int{0x120}) {
-		t.Fatal("expected exact hash and unique expected offset to allow automatic patching")
-	}
-	if patch.canAutoPatchAtExpectedOffset("different-sha256", []int{0x120}) {
-		t.Fatal("expected a different source hash to block automatic patching")
-	}
-	if patch.canAutoPatchAtExpectedOffset("known-sha256", []int{0x121}) {
-		t.Fatal("expected an unexpected offset to block automatic patching")
-	}
-	if patch.canAutoPatchAtExpectedOffset("known-sha256", []int{0x120, 0x220}) {
-		t.Fatal("expected duplicate matches to block automatic patching")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tibiaBinary, peData, fixture := newStructuralClientCheckFixture(t)
+			test.mutate(tibiaBinary, &peData, fixture)
+			plan := buildStructuralPatchPlan(tibiaBinary, peData, structuralTestPatches(t))
+			if plan.verifiedGroups[structuralClientCheckGroup] {
+				t.Fatal("expected unsafe or ambiguous structural evidence to reject the entire patch group")
+			}
+		})
 	}
 }
 
@@ -160,7 +193,7 @@ func TestSuspiciousActiveEvidenceRequiresPatchedSignatureForWarningVerdict(t *te
 
 	findings := scanClientCheckFindings(tibiaBinary, peData, nil)
 	diagnosis := diagnosisReport{
-		patchStatuses:       []battleyePatchStatus{{patch: battleyePatches[1], originalOffset: []int{0x180}}},
+		patchStatuses:       []battleyePatchStatus{{patch: battleyePatches[0], originalOffset: []int{0x180}}},
 		clientCheckFindings: findings,
 	}
 
@@ -174,7 +207,7 @@ func TestSuspiciousActiveEvidenceRequiresPatchedSignatureForWarningVerdict(t *te
 		t.Fatalf("expected unpatched known signature to remain PARTIAL, got %q", diagnosis.clientCheckVerdict())
 	}
 
-	diagnosis.patchStatuses = []battleyePatchStatus{{patch: battleyePatches[1], patchedOffset: []int{0x180}}}
+	diagnosis.patchStatuses = []battleyePatchStatus{{patch: battleyePatches[0], patchedOffset: []int{0x180}}}
 	if diagnosis.clientCheckVerdict() != "WARNING: known client-check patch applied but suspicious branch/call evidence remains" {
 		t.Fatalf("expected patched known signature plus suspicious evidence to become WARNING, got %q", diagnosis.clientCheckVerdict())
 	}
@@ -183,7 +216,7 @@ func TestSuspiciousActiveEvidenceRequiresPatchedSignatureForWarningVerdict(t *te
 func TestHighRiskDiagnosticSignatureChangesPatchedVerdict(t *testing.T) {
 	diagnosis := diagnosisReport{
 		patchStatuses: []battleyePatchStatus{
-			{patch: battleyePatches[1], patchedOffset: []int{0x2DE804}},
+			{patch: battleyePatches[0], patchedOffset: []int{0x2DE804}},
 			{patch: battleyePatch{name: "test high-risk", diagnosticOnly: true, highRiskClientCheck: true}, originalOffset: []int{0x1A8E3D}},
 		},
 	}
@@ -289,6 +322,119 @@ func mustParseEmbeddedConfigINI(t *testing.T, configData []byte) embeddedConfigI
 		t.Fatal("expected embedded config.ini block to parse")
 	}
 	return embeddedConfig
+}
+
+type structuralClientCheckFixture struct {
+	clientCheckOffset             int
+	enableClientCheckOffset       int
+	clientCheckStringOffset       int
+	errorStringOffset             int
+	enableClientCheckStringOffset int
+	qtIATOffset                   int
+	constructorIATOffset          int
+	destructorIATOffset           int
+	objectOffset                  int
+	destructorThunkOffset         int
+}
+
+func newStructuralClientCheckFixture(t *testing.T) ([]byte, peInfo, structuralClientCheckFixture) {
+	t.Helper()
+	fixture := structuralClientCheckFixture{
+		clientCheckOffset:             0x180,
+		enableClientCheckOffset:       0x300,
+		clientCheckStringOffset:       0x720,
+		errorStringOffset:             0x750,
+		enableClientCheckStringOffset: 0x780,
+		qtIATOffset:                   0x7c0,
+		constructorIATOffset:          0x7c8,
+		destructorIATOffset:           0x7d0,
+		objectOffset:                  0x900,
+		destructorThunkOffset:         0x500,
+	}
+	peData := peInfo{
+		valid: true,
+		sections: []peSectionInfo{
+			{name: ".text", rawStart: 0x100, rawEnd: 0x700, rvaStart: 0x1000, rvaEnd: 0x1600, isCode: true},
+			{name: ".rdata", rawStart: 0x700, rawEnd: 0x880, rvaStart: 0x2000, rvaEnd: 0x2180},
+			{name: ".data", rawStart: 0x900, rawEnd: 0xa00, rvaStart: 0x3000, rvaEnd: 0x3100, isWritable: true},
+		},
+	}
+	tibiaBinary := make([]byte, 0xa00)
+	copy(tibiaBinary[fixture.clientCheckStringOffset:], []byte("clientcheck_disconnected\x00"))
+	copy(tibiaBinary[fixture.errorStringOffset:], []byte("error\x00"))
+	copy(tibiaBinary[fixture.enableClientCheckStringOffset:], []byte("enableClientCheck\x00"))
+
+	populateClientCheckPattern(t, tibiaBinary, peData, fixture.clientCheckOffset, fixture)
+	populateEnableClientCheckPattern(t, tibiaBinary, peData, fixture)
+
+	clientCheckRVA, _ := peData.rvaForOffset(fixture.clientCheckOffset)
+	enableClientCheckRVA, _ := peData.rvaForOffset(fixture.enableClientCheckOffset)
+	peData.runtimeFunctions = []peRuntimeFunction{
+		{beginRVA: clientCheckRVA - 0x20, endRVA: clientCheckRVA + 0x80},
+		{beginRVA: enableClientCheckRVA, endRVA: enableClientCheckRVA + 40},
+	}
+	return tibiaBinary, peData, fixture
+}
+
+func populateClientCheckPattern(t *testing.T, tibiaBinary []byte, peData peInfo, offset int, fixture structuralClientCheckFixture) {
+	t.Helper()
+	copy(tibiaBinary[offset:], structuralClientCheckDisconnectedPattern.data)
+	binary.LittleEndian.PutUint32(tibiaBinary[offset+26:offset+30], 0xa20)
+	writeRelativeTarget(t, tibiaBinary, peData, offset+18, 5, 1, mustRVAForOffset(t, peData, 0x600))
+	writeRelativeTarget(t, tibiaBinary, peData, offset+36, 7, 3, mustRVAForOffset(t, peData, fixture.clientCheckStringOffset))
+	writeRelativeTarget(t, tibiaBinary, peData, offset+47, 6, 2, mustRVAForOffset(t, peData, fixture.qtIATOffset))
+	writeRelativeTarget(t, tibiaBinary, peData, offset+62, 7, 3, mustRVAForOffset(t, peData, fixture.errorStringOffset))
+	writeRelativeTarget(t, tibiaBinary, peData, offset+73, 6, 2, mustRVAForOffset(t, peData, fixture.qtIATOffset))
+	writeRelativeTarget(t, tibiaBinary, peData, offset+93, 5, 1, mustRVAForOffset(t, peData, 0x550))
+}
+
+func populateEnableClientCheckPattern(t *testing.T, tibiaBinary []byte, peData peInfo, fixture structuralClientCheckFixture) {
+	t.Helper()
+	offset := fixture.enableClientCheckOffset
+	copy(tibiaBinary[offset:], structuralEnableClientCheckPattern.data)
+	writeRelativeTarget(t, tibiaBinary, peData, offset+4, 7, 3, mustRVAForOffset(t, peData, fixture.enableClientCheckStringOffset))
+	writeRelativeTarget(t, tibiaBinary, peData, offset+11, 7, 3, mustRVAForOffset(t, peData, fixture.objectOffset))
+	writeRelativeTarget(t, tibiaBinary, peData, offset+18, 6, 2, mustRVAForOffset(t, peData, fixture.constructorIATOffset))
+	writeRelativeTarget(t, tibiaBinary, peData, offset+24, 7, 3, mustRVAForOffset(t, peData, fixture.destructorThunkOffset))
+	writeRelativeTarget(t, tibiaBinary, peData, offset+35, 5, 1, mustRVAForOffset(t, peData, 0x580))
+
+	thunkOffset := fixture.destructorThunkOffset
+	copy(tibiaBinary[thunkOffset:], []byte{0x48, 0x8d, 0x0d, 0, 0, 0, 0, 0x48, 0xff, 0x25, 0, 0, 0, 0})
+	writeRelativeTarget(t, tibiaBinary, peData, thunkOffset, 7, 3, mustRVAForOffset(t, peData, fixture.objectOffset))
+	writeRelativeTarget(t, tibiaBinary, peData, thunkOffset+7, 7, 3, mustRVAForOffset(t, peData, fixture.destructorIATOffset))
+}
+
+func structuralTestPatches(t *testing.T) []battleyePatch {
+	t.Helper()
+	patches := make([]battleyePatch, 0, 2)
+	for _, patch := range battleyePatches {
+		if patch.structuralGuard != nil && patch.structuralGuard.group == structuralClientCheckGroup {
+			patches = append(patches, patch)
+		}
+	}
+	if len(patches) != 2 {
+		t.Fatalf("expected two structural client-check patches, got %d", len(patches))
+	}
+	return patches
+}
+
+func writeRelativeTarget(t *testing.T, tibiaBinary []byte, peData peInfo, instructionOffset int, instructionLength int, displacementOffset int, targetRVA int) {
+	t.Helper()
+	instructionRVA, ok := peData.rvaForOffset(instructionOffset)
+	if !ok {
+		t.Fatalf("fixture instruction offset 0x%X has no RVA", instructionOffset)
+	}
+	displacement := targetRVA - (instructionRVA + instructionLength)
+	binary.LittleEndian.PutUint32(tibiaBinary[instructionOffset+displacementOffset:instructionOffset+displacementOffset+4], uint32(int32(displacement)))
+}
+
+func mustRVAForOffset(t *testing.T, peData peInfo, offset int) int {
+	t.Helper()
+	rva, ok := peData.rvaForOffset(offset)
+	if !ok {
+		t.Fatalf("fixture offset 0x%X has no RVA", offset)
+	}
+	return rva
 }
 
 func newPEBinary() []byte {

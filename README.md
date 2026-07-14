@@ -28,7 +28,7 @@ The `edit` command also keeps the client-side `config.ini` in sync with the embe
 
 ### Client-check safety
 
-By default, `edit` keeps the safe behavior: known stable BattlEye patches are applied, diagnostic-only high-risk signatures are reported, and high-risk client-check paths are not rewritten.
+By default, `edit` applies known stable BattlEye patches and may also rewrite a high-risk client-check path when all verified evidence agrees: the pristine source SHA256 is registered for that signature, the exact byte pattern has one match, and that match is at the expected offset. High-risk matches that fail any of those checks remain diagnostic-only and are not rewritten automatically.
 
 The edit command refuses to export only when strong unsupported client-check evidence remains. If the verdict is `PARTIAL` or `WARNING` but strong evidence is `none`, the export is allowed and the tool prints warnings for manual validation.
 
@@ -62,9 +62,9 @@ When a pristine executable is available, pass it with `--source-exe`. If omitted
 
 ### Aggressive mode
 
-`--aggressive` enables optional rewriting of known high-risk client-check dispatch signatures that are diagnostic-only in safe mode. This mode is experimental and intended for manually validated clients only.
+`--aggressive` enables optional rewriting of known high-risk client-check dispatch signatures without requiring the registered source-SHA256 and expected-offset checks used by normal mode. The exact version-scoped byte signature must still match. This mode is experimental and intended for manually validated clients only.
 
-- `--aggressive=false`: default behavior; high-risk signatures are reported but not rewritten.
+- `--aggressive=false`: default behavior; verified high-risk signatures are rewritten automatically, while unverified high-risk signatures are only reported.
 - `--aggressive=true`: rewrites the two high-risk paths and prints a large warning before patching. The `clientcheck_disconnected` path is neutralized by nopping its final dispatch call; the `enableClientCheck` xref wrapper is neutralized without changing its original tail jump.
 - `--strict --aggressive`: still fails the export when the final diagnosis is unsafe, even after aggressive rewriting.
 

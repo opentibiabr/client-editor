@@ -35,6 +35,61 @@ func TestRemoveBattlEyeAppliesAllKnownWindowsPatches(t *testing.T) {
 	}
 }
 
+func TestRemoveBattlEyeAutomaticallyAppliesVerifiedHighRiskPatch(t *testing.T) {
+	originalPatches := battleyePatches
+	t.Cleanup(func() {
+		battleyePatches = originalPatches
+	})
+
+	const (
+		sourceSHA256 = "fixture-sha256"
+		patchOffset  = 0x90
+	)
+	battleyePatches = []battleyePatch{
+		{
+			name:                      "verified high-risk fixture",
+			original:                  newBytePattern("verified high-risk fixture", 0xde, 0xad, 0xbe, 0xef),
+			diagnosticOnly:            true,
+			highRiskClientCheck:       true,
+			autoPatchAtExpectedOffset: true,
+			aggressiveReplacement:     newPatchReplacement(0x90, 0x90, 0x90, 0x90),
+			expectedOffsets: []knownPatchOffset{
+				{sha256: sourceSHA256, offset: patchOffset},
+			},
+		},
+	}
+
+	tibiaBinary := append(newPEBinary(), make([]byte, patchOffset+4-len(newPEBinary()))...)
+	copy(tibiaBinary[patchOffset:], []byte{0xde, 0xad, 0xbe, 0xef})
+
+	patched := removeBattlEyeWithSourceSHA("client.exe", tibiaBinary, false, sourceSHA256)
+	if !bytes.Equal(patched[patchOffset:patchOffset+4], []byte{0x90, 0x90, 0x90, 0x90}) {
+		t.Fatalf("expected verified high-risk signature to be patched in normal mode, got % X", patched[patchOffset:patchOffset+4])
+	}
+}
+
+func TestHighRiskAutoPatchRequiresExactHashAndUniqueExpectedOffset(t *testing.T) {
+	patch := battleyePatch{
+		autoPatchAtExpectedOffset: true,
+		expectedOffsets: []knownPatchOffset{
+			{sha256: "known-sha256", offset: 0x120},
+		},
+	}
+
+	if !patch.canAutoPatchAtExpectedOffset("known-sha256", []int{0x120}) {
+		t.Fatal("expected exact hash and unique expected offset to allow automatic patching")
+	}
+	if patch.canAutoPatchAtExpectedOffset("different-sha256", []int{0x120}) {
+		t.Fatal("expected a different source hash to block automatic patching")
+	}
+	if patch.canAutoPatchAtExpectedOffset("known-sha256", []int{0x121}) {
+		t.Fatal("expected an unexpected offset to block automatic patching")
+	}
+	if patch.canAutoPatchAtExpectedOffset("known-sha256", []int{0x120, 0x220}) {
+		t.Fatal("expected duplicate matches to block automatic patching")
+	}
+}
+
 func TestRemoveBattlEyeSkipsNonWindowsExecutable(t *testing.T) {
 	tibiaBinary := []byte("ELF--BattlEye--")
 	tibiaBinary = append(tibiaBinary, []byte{0x75, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48}...)

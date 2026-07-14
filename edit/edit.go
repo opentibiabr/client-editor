@@ -48,15 +48,16 @@ const (
 )
 
 type battleyePatch struct {
-	name                  string
-	original              bytePattern
-	patched               bytePattern
-	replacement           []int
-	diagnosticOnly        bool
-	aggressiveReplacement []int
-	highRiskClientCheck   bool
-	expectedOffsets       []knownPatchOffset
-	falsePositiveCheck    string
+	name                      string
+	original                  bytePattern
+	patched                   bytePattern
+	replacement               []int
+	diagnosticOnly            bool
+	aggressiveReplacement     []int
+	highRiskClientCheck       bool
+	autoPatchAtExpectedOffset bool
+	expectedOffsets           []knownPatchOffset
+	falsePositiveCheck        string
 }
 
 type bytePattern struct {
@@ -200,10 +201,11 @@ var battleyePatches = []battleyePatch{
 		falsePositiveCheck: "diagnostic-only xref context observed around reported ref 0x1BB42C; BEClient remains weak by itself because Qt metadata/dialog text can reference it without proving active client-check flow",
 	},
 	{
-		name:                "high-risk clientcheck_disconnected dispatch path",
-		original:            newBytePattern("high-risk clientcheck_disconnected dispatch path", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x30, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x18, 0x39, 0x80, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xbe, 0x4a, 0x7d, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
-		diagnosticOnly:      true,
-		highRiskClientCheck: true,
+		name:                      "high-risk clientcheck_disconnected dispatch path",
+		original:                  newBytePattern("high-risk clientcheck_disconnected dispatch path", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x30, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x18, 0x39, 0x80, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xbe, 0x4a, 0x7d, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
+		diagnosticOnly:            true,
+		highRiskClientCheck:       true,
+		autoPatchAtExpectedOffset: true,
 		aggressiveReplacement: neutralizeBranchJumpPattern(
 			newBytePattern("high-risk clientcheck_disconnected dispatch path [aggressive source]", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x30, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x18, 0x39, 0x80, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xbe, 0x4a, 0x7d, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
 			map[int]int{93: 0x90, 94: 0x90, 95: 0x90, 96: 0x90, 97: 0x90},
@@ -213,6 +215,32 @@ var battleyePatches = []battleyePatch{
 			{sha256: "985fb4e114b3156a5488b7b35ed5d8615d58fff140a04d8e73c18ac0b4d871e5", offset: 0x1A8E3D, note: "observed local clientcheck_disconnected dispatch path seen after the known 0x2DE804 patch"},
 		},
 		falsePositiveCheck: "diagnostic-only high-risk path; CALL bytes are wildcarded, but fixed surrounding xref/field-access bytes tie it to the reported clientcheck_disconnected dispatch context; aggressive mode nops the final signal dispatch call",
+	},
+	{
+		name:                "high-risk clientcheck_disconnected dispatch path local 2026-07",
+		original:            newBytePattern("high-risk clientcheck_disconnected dispatch path local 2026-07", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x20, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x78, 0x2c, 0xa4, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xe6, 0x86, 0x98, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
+		diagnosticOnly:      true,
+		highRiskClientCheck: true,
+		aggressiveReplacement: neutralizeBranchJumpPattern(
+			newBytePattern("high-risk clientcheck_disconnected dispatch path local 2026-07 [aggressive source]", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x20, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x78, 0x2c, 0xa4, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xe6, 0x86, 0x98, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
+			map[int]int{93: 0x90, 94: 0x90, 95: 0x90, 96: 0x90, 97: 0x90},
+		),
+		falsePositiveCheck: "version-scoped local 2026-07 high-risk path; aggressive mode nops the final clientcheck_disconnected signal dispatch call",
+	},
+	{
+		name:                      "high-risk clientcheck_disconnected dispatch path Tibia 15.30 d8e89368",
+		original:                  newBytePattern("high-risk clientcheck_disconnected dispatch path Tibia 15.30 d8e89368", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x60, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xb0, 0x6c, 0xac, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x2e, 0x87, 0xa0, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
+		diagnosticOnly:            true,
+		highRiskClientCheck:       true,
+		autoPatchAtExpectedOffset: true,
+		aggressiveReplacement: neutralizeBranchJumpPattern(
+			newBytePattern("high-risk clientcheck_disconnected dispatch path Tibia 15.30 d8e89368 [aggressive source]", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x60, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xb0, 0x6c, 0xac, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x2e, 0x87, 0xa0, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
+			map[int]int{93: 0x90, 94: 0x90, 95: 0x90, 96: 0x90, 97: 0x90},
+		),
+		expectedOffsets: []knownPatchOffset{
+			{sha256: "d8e893689cf7b70016889add309af827f43d07f95acf7b7d4106cde885fd6627", offset: 0x1D9B9D, note: "Tibia 15.30 clientcheck_disconnected dispatch path"},
+		},
+		falsePositiveCheck: "hash-scoped Tibia 15.30 path; aggressive mode nops the final clientcheck_disconnected signal dispatch call",
 	},
 	{
 		name:           "candidate enableClientCheck Qt xref dispatch",
@@ -225,10 +253,11 @@ var battleyePatches = []battleyePatch{
 		falsePositiveCheck: "diagnostic-only xref context observed around reported ref 0xE8C4; exact displacement bytes keep this version-specific until the RIP target and branch/call flow are manually reviewed",
 	},
 	{
-		name:                "high-risk enableClientCheck dispatch path",
-		original:            newBytePattern("high-risk enableClientCheck dispatch path", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x65, 0xc5, 0x99, 0x01, 0x48, 0x8d, 0x0d, 0x36, 0x04, 0xcf, 0x01, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x11, 0xd0, 0xf7, 0x00, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
-		diagnosticOnly:      true,
-		highRiskClientCheck: true,
+		name:                      "high-risk enableClientCheck dispatch path",
+		original:                  newBytePattern("high-risk enableClientCheck dispatch path", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x65, 0xc5, 0x99, 0x01, 0x48, 0x8d, 0x0d, 0x36, 0x04, 0xcf, 0x01, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x11, 0xd0, 0xf7, 0x00, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
+		diagnosticOnly:            true,
+		highRiskClientCheck:       true,
+		autoPatchAtExpectedOffset: true,
 		aggressiveReplacement: neutralizeBranchJumpPattern(
 			newBytePattern("high-risk enableClientCheck dispatch path [aggressive source]", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x65, 0xc5, 0x99, 0x01, 0x48, 0x8d, 0x0d, 0x36, 0x04, 0xcf, 0x01, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x11, 0xd0, 0xf7, 0x00, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
 			map[int]int{18: 0x90, 19: 0x90, 20: 0x90, 21: 0x90, 22: 0x90, 23: 0x90},
@@ -238,6 +267,32 @@ var battleyePatches = []battleyePatch{
 			{sha256: "985fb4e114b3156a5488b7b35ed5d8615d58fff140a04d8e73c18ac0b4d871e5", offset: 0xE8C0, note: "observed local enableClientCheck dispatch path seen after the known 0x2DE804 patch"},
 		},
 		falsePositiveCheck: "diagnostic-only high-risk path; CALL/JMP bytes are wildcarded, but fixed enableClientCheck xref and thunk shape keep the match scoped to the reported dispatch context; aggressive mode nops only the Qt metadata call and preserves the original tail jump",
+	},
+	{
+		name:                "high-risk enableClientCheck dispatch path local 2026-07",
+		original:            newBytePattern("high-risk enableClientCheck dispatch path local 2026-07", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x45, 0x59, 0xc0, 0x01, 0x48, 0x8d, 0x0d, 0x96, 0x9a, 0x35, 0x02, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x01, 0xa6, 0x15, 0x01, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
+		diagnosticOnly:      true,
+		highRiskClientCheck: true,
+		aggressiveReplacement: neutralizeBranchJumpPattern(
+			newBytePattern("high-risk enableClientCheck dispatch path local 2026-07 [aggressive source]", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x45, 0x59, 0xc0, 0x01, 0x48, 0x8d, 0x0d, 0x96, 0x9a, 0x35, 0x02, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x01, 0xa6, 0x15, 0x01, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
+			map[int]int{18: 0x90, 19: 0x90, 20: 0x90, 21: 0x90, 22: 0x90, 23: 0x90},
+		),
+		falsePositiveCheck: "version-scoped local 2026-07 high-risk path; aggressive mode nops the enableClientCheck Qt metadata call and preserves the tail jump",
+	},
+	{
+		name:                      "high-risk enableClientCheck dispatch path Tibia 15.30 d8e89368",
+		original:                  newBytePattern("high-risk enableClientCheck dispatch path Tibia 15.30 d8e89368", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x8d, 0x03, 0xc9, 0x01, 0x48, 0x8d, 0x0d, 0x86, 0x0a, 0x43, 0x02, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x01, 0x39, 0x1b, 0x01, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
+		diagnosticOnly:            true,
+		highRiskClientCheck:       true,
+		autoPatchAtExpectedOffset: true,
+		aggressiveReplacement: neutralizeBranchJumpPattern(
+			newBytePattern("high-risk enableClientCheck dispatch path Tibia 15.30 d8e89368 [aggressive source]", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x8d, 0x03, 0xc9, 0x01, 0x48, 0x8d, 0x0d, 0x86, 0x0a, 0x43, 0x02, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x01, 0x39, 0x1b, 0x01, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
+			map[int]int{18: 0x90, 19: 0x90, 20: 0x90, 21: 0x90, 22: 0x90, 23: 0x90},
+		),
+		expectedOffsets: []knownPatchOffset{
+			{sha256: "d8e893689cf7b70016889add309af827f43d07f95acf7b7d4106cde885fd6627", offset: 0xEB50, note: "Tibia 15.30 enableClientCheck dispatch path"},
+		},
+		falsePositiveCheck: "hash-scoped Tibia 15.30 path; aggressive mode nops the enableClientCheck Qt metadata call and preserves the tail jump",
 	},
 }
 
@@ -299,6 +354,8 @@ func Edit(tibiaExe string, sourceTibiaExe string, strictClientCheck bool, aggres
 	tibiaBinary := append([]byte(nil), sourceBinary...)
 	originalBinarySize := len(sourceBinary)
 	originalTibiaBinary := append([]byte(nil), tibiaBinary...)
+	sourceSum := sha256.Sum256(originalTibiaBinary)
+	sourceSHA256 := fmt.Sprintf("%x", sourceSum[:])
 
 	if sourcePath != tibiaExe {
 		fmt.Printf("[INFO] Using source client executable for patch input: %s\n", filepath.Base(sourcePath))
@@ -306,7 +363,7 @@ func Edit(tibiaExe string, sourceTibiaExe string, strictClientCheck bool, aggres
 	}
 
 	tibiaBinary = replaceTibiaRSAKey(tibiaBinary)
-	tibiaBinary = removeBattlEye(tibiaPath, tibiaBinary, aggressiveClientCheck)
+	tibiaBinary = removeBattlEyeWithSourceSHA(tibiaPath, tibiaBinary, aggressiveClientCheck, sourceSHA256)
 	diagnosis := analyzeTibiaBinary(tibiaPath, tibiaBinary)
 	logClientCheckSupportSummary(diagnosis)
 	enforceEditClientCheckPolicy(diagnosis, strictClientCheck)
@@ -399,6 +456,11 @@ func replaceTibiaRSAKey(tibiaBinary []byte) []byte {
 }
 
 func removeBattlEye(tibiaPath string, tibiaBinary []byte, aggressive bool) []byte {
+	sum := sha256.Sum256(tibiaBinary)
+	return removeBattlEyeWithSourceSHA(tibiaPath, tibiaBinary, aggressive, fmt.Sprintf("%x", sum[:]))
+}
+
+func removeBattlEyeWithSourceSHA(tibiaPath string, tibiaBinary []byte, aggressive bool, sourceSHA256 string) []byte {
 	if !isWindowsExecutable(tibiaPath, tibiaBinary) {
 		fmt.Printf("[WARN] Battleye patch skipped because the client is not a Windows executable\n")
 		return tibiaBinary
@@ -419,16 +481,20 @@ func removeBattlEye(tibiaPath string, tibiaBinary []byte, aggressive bool) []byt
 	alreadyApplied := 0
 	patchableSignatures := 0
 	for _, patch := range activeBattleyePatches {
-		if !patch.diagnosticOnly || (aggressive && len(patch.aggressiveReplacement) > 0) {
-			patchableSignatures++
-		}
-	}
-	for _, patch := range activeBattleyePatches {
 		originalOffsets := patch.original.findAll(tibiaBinary)
 		patchedOffsets := patch.patched.findAll(tibiaBinary)
+		if patch.diagnosticOnly && len(patch.aggressiveReplacement) > 0 && len(patch.patched.data) == 0 {
+			patchedOffsets = newBytePattern(patch.name+" [aggressive]", patch.aggressiveReplacement...).findAll(tibiaBinary)
+		}
+		verifiedAutoPatch := !aggressive && (patch.canAutoPatchAtExpectedOffset(sourceSHA256, originalOffsets) || patch.canAutoPatchAtExpectedOffset(sourceSHA256, patchedOffsets))
+		eligiblePatch := !patch.diagnosticOnly || (aggressive && len(patch.aggressiveReplacement) > 0) || verifiedAutoPatch
+		if eligiblePatch && (len(originalOffsets) > 0 || len(patchedOffsets) > 0) {
+			patchableSignatures++
+		}
 
 		if patch.diagnosticOnly {
-			if len(originalOffsets) > 0 && aggressive && len(patch.aggressiveReplacement) > 0 {
+			autoPatch := verifiedAutoPatch && len(originalOffsets) > 0
+			if len(originalOffsets) > 0 && (aggressive || autoPatch) && len(patch.aggressiveReplacement) > 0 {
 				aggressivePatch := patch
 				aggressivePatch.diagnosticOnly = false
 				aggressivePatch.replacement = append([]int(nil), patch.aggressiveReplacement...)
@@ -438,7 +504,11 @@ func removeBattlEye(tibiaPath string, tibiaBinary []byte, aggressive bool) []byt
 				count := len(originalOffsets)
 				patchesApplied += count
 				signaturesApplied++
-				fmt.Printf("[PATCH] BattlEye high-risk signature %q patched aggressively (%d occurrence(s))\n", patch.name, count)
+				if autoPatch {
+					fmt.Printf("[PATCH] BattlEye high-risk signature %q patched automatically at its verified offset (%d occurrence(s))\n", patch.name, count)
+				} else {
+					fmt.Printf("[PATCH] BattlEye high-risk signature %q patched aggressively (%d occurrence(s))\n", patch.name, count)
+				}
 				continue
 			}
 
@@ -1780,6 +1850,20 @@ func (patch battleyePatch) withAggressiveMode(aggressive bool) battleyePatch {
 	patch.patched = newBytePattern(patch.name+" [aggressive]", patch.aggressiveReplacement...)
 
 	return patch
+}
+
+func (patch battleyePatch) canAutoPatchAtExpectedOffset(sourceSHA256 string, originalOffsets []int) bool {
+	if !patch.autoPatchAtExpectedOffset || len(originalOffsets) != 1 || len(patch.expectedOffsets) == 0 {
+		return false
+	}
+
+	for _, expected := range patch.expectedOffsets {
+		if strings.EqualFold(sourceSHA256, expected.sha256) && originalOffsets[0] == expected.offset {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (pattern bytePattern) findAll(data []byte) []int {

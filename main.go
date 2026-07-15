@@ -82,7 +82,7 @@ func init() {
 	}
 	editCmd.PersistentFlags().StringVarP(&tibiaExe, "tibia-exe", "t", getDefaultTibiaExe(), "Path to Tibia executable")
 	editCmd.PersistentFlags().StringVar(&sourceTibiaExe, "source-exe", "", "Optional pristine source executable to use as input; defaults to \"client - original.exe\" beside --tibia-exe when present")
-	editCmd.PersistentFlags().BoolVar(&aggressiveEditClientCheck, "aggressive", false, "Also rewrite high-risk client-check dispatch signatures (experimental; keep backup and manual verify)")
+	editCmd.PersistentFlags().BoolVar(&aggressiveEditClientCheck, "aggressive", false, "Enable experimental client-check compatibility mode (structural safety checks still apply; keep backup and manual verify)")
 	editCmd.PersistentFlags().BoolVar(&strictEditClientCheck, "strict", false, "Fail before export when client-check compatibility is partial, warning, or unsupported")
 	editCmd.PersistentFlags().BoolVar(&strictEditClientCheck, "fail-on-partial", false, "Alias for --strict")
 	editCmd.PersistentFlags().BoolVar(&strictEditClientCheck, "fail-on-unsupported-client-check", false, "Alias for --strict")

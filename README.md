@@ -28,7 +28,9 @@ The `edit` command also keeps the client-side `config.ini` in sync with the embe
 
 ### Client-check safety
 
-By default, `edit` keeps the safe behavior: known stable BattlEye patches are applied, diagnostic-only high-risk signatures are reported, and high-risk client-check paths are not rewritten.
+By default, `edit` applies known stable BattlEye patches and automatically neutralizes the client-check pair only when both paths pass structural verification before either path is changed. Verification requires unique normalized instruction shapes, exact RIP-relative `clientcheck_disconnected`, `error`, and `enableClientCheck` string targets, valid executable and writable PE sections, matching runtime-function boundaries from `.pdata`, consistent IAT/thunk relationships, and valid call targets. The final `clientcheck_disconnected` dispatch call and the `enableClientCheck` wrapper call are the only rewritten instructions.
+
+Source SHA256 values and observed offsets are retained as audit evidence, but they are not runtime authorization requirements. A future client can therefore be patched automatically when addresses, relative displacements, or the client object field offset move while the full verified structure remains the same. If the compiler, Qt wrapper, function boundary, semantic target, candidate count, or paired relationship changes, normal mode fails closed and reports the evidence without rewriting either path. The ambiguous `75 0F E8 35 FF FF FF 48` branch signature is diagnostic-only because it also occurs in unrelated container code.
 
 The edit command refuses to export only when strong unsupported client-check evidence remains. If the verdict is `PARTIAL` or `WARNING` but strong evidence is `none`, the export is allowed and the tool prints warnings for manual validation.
 
@@ -62,13 +64,13 @@ When a pristine executable is available, pass it with `--source-exe`. If omitted
 
 ### Aggressive mode
 
-`--aggressive` enables optional rewriting of known high-risk client-check dispatch signatures that are diagnostic-only in safe mode. This mode is experimental and intended for manually validated clients only.
+`--aggressive` remains available for experimental compatibility work and keeps its prominent backup warning, but it does not bypass the structural verification required for the client-check pair. Legacy version-scoped high-risk masks are retained as diagnostic evidence only and cannot authorize a rewrite by themselves.
 
-- `--aggressive=false`: default behavior; high-risk signatures are reported but not rewritten.
-- `--aggressive=true`: rewrites the two high-risk paths and prints a large warning before patching. The `clientcheck_disconnected` path is neutralized by nopping its final dispatch call; the `enableClientCheck` xref wrapper is neutralized without changing its original tail jump.
+- `--aggressive=false`: default behavior; a uniquely verified structural pair is rewritten automatically, while incomplete or ambiguous evidence is only reported.
+- `--aggressive=true`: uses the same structural gate for these two paths and prints the aggressive-mode backup warning.
 - `--strict --aggressive`: still fails the export when the final diagnosis is unsafe, even after aggressive rewriting.
 
-Aggressive signatures are version-scoped. If a newer or older client does not match the high-risk byte pattern exactly, the high-risk rewrite is skipped and only stable patchable signatures are applied. Every applied patch logs a before/after byte window covering the rewritten bytes.
+Every applied patch logs a before/after byte window covering the rewritten bytes. Re-running the editor accepts the structurally verified already-patched state without applying the instructions again.
 
 ```bash
 # Windows

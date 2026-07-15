@@ -55,6 +55,8 @@ type battleyePatch struct {
 	diagnosticOnly        bool
 	aggressiveReplacement []int
 	highRiskClientCheck   bool
+	legacyEvidenceOnly    bool
+	structuralGuard       *structuralPatchGuard
 	expectedOffsets       []knownPatchOffset
 	falsePositiveCheck    string
 }
@@ -71,6 +73,30 @@ type knownPatchOffset struct {
 	note   string
 }
 
+type structuralPatchKind string
+
+const (
+	structuralClientCheckGroup                            = "qt-client-check"
+	structuralClientCheckDisconnected structuralPatchKind = "clientcheck_disconnected"
+	structuralEnableClientCheck       structuralPatchKind = "enableClientCheck"
+)
+
+type structuralPatchGuard struct {
+	group string
+	kind  structuralPatchKind
+}
+
+type structuralPatchMatch struct {
+	originalOffsets []int
+	patchedOffsets  []int
+	unique          bool
+}
+
+type structuralPatchPlan struct {
+	matches        map[int]structuralPatchMatch
+	verifiedGroups map[string]bool
+}
+
 type clientCheckIndicator struct {
 	name  string
 	value []byte
@@ -85,20 +111,27 @@ type battleyePatchStatus struct {
 }
 
 type peSectionInfo struct {
-	name     string
-	rawStart int
-	rawEnd   int
-	rvaStart int
-	rvaEnd   int
-	isCode   bool
+	name       string
+	rawStart   int
+	rawEnd     int
+	rvaStart   int
+	rvaEnd     int
+	isCode     bool
+	isWritable bool
+}
+
+type peRuntimeFunction struct {
+	beginRVA int
+	endRVA   int
 }
 
 type peInfo struct {
-	valid     bool
-	errorText string
-	imageBase uint64
-	sections  []peSectionInfo
-	imports   []string
+	valid            bool
+	errorText        string
+	imageBase        uint64
+	sections         []peSectionInfo
+	runtimeFunctions []peRuntimeFunction
+	imports          []string
 }
 
 type clientCheckReference struct {
@@ -138,6 +171,45 @@ type diagnosisReport struct {
 	qtIndicators        []string
 }
 
+var structuralClientCheckDisconnectedPattern = newBytePattern(
+	"structural clientcheck_disconnected dispatch path",
+	0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97,
+	0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte,
+	0x48, 0x8b, 0xbf, wildcardByte, wildcardByte, wildcardByte, wildcardByte,
+	0x41, 0xb8, 0xff, 0xff, 0xff, 0xff,
+	0x48, 0x8d, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte,
+	0x48, 0x8d, 0x4d, 0x37,
+	0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte,
+	0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff,
+	0x48, 0x8d, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte,
+	0x48, 0x8d, 0x4d, 0x1f,
+	0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte,
+	0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf,
+	0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90,
+)
+
+var structuralClientCheckDisconnectedReplacement = neutralizeBranchJumpPattern(
+	structuralClientCheckDisconnectedPattern,
+	map[int]int{93: 0x90, 94: 0x90, 95: 0x90, 96: 0x90, 97: 0x90},
+)
+
+var structuralEnableClientCheckPattern = newBytePattern(
+	"structural enableClientCheck wrapper",
+	0x48, 0x83, 0xec, 0x28,
+	0x48, 0x8d, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte,
+	0x48, 0x8d, 0x0d, wildcardByte, wildcardByte, wildcardByte, wildcardByte,
+	0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte,
+	0x48, 0x8d, 0x0d, wildcardByte, wildcardByte, wildcardByte, wildcardByte,
+	0x48, 0x83, 0xc4, 0x28,
+	0xe9, wildcardByte, wildcardByte, wildcardByte, wildcardByte,
+	0xcc, 0xcc, 0xcc, 0xcc,
+)
+
+var structuralEnableClientCheckReplacement = neutralizeBranchJumpPattern(
+	structuralEnableClientCheckPattern,
+	map[int]int{18: 0x90, 19: 0x90, 20: 0x90, 21: 0x90, 22: 0x90, 23: 0x90},
+)
+
 var battleyePatches = []battleyePatch{
 	{
 		name:        "legacy launch check",
@@ -146,10 +218,11 @@ var battleyePatches = []battleyePatch{
 		replacement: newPatchReplacement(0x8d, 0x4d, 0xb4, 0xeb, 0x0e, 0xe8, 0xb4, 0x53),
 	},
 	{
-		name:        "client check branch",
-		original:    newBytePattern("client check branch original", 0x75, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48),
-		patched:     newBytePattern("client check branch patched", 0xeb, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48),
-		replacement: newPatchReplacement(0xeb, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48),
+		name:           "ambiguous client check branch",
+		original:       newBytePattern("client check branch original", 0x75, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48),
+		patched:        newBytePattern("client check branch patched", 0xeb, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48),
+		replacement:    newPatchReplacement(0xeb, 0x0f, 0xe8, 0x35, 0xff, 0xff, 0xff, 0x48),
+		diagnosticOnly: true,
 		expectedOffsets: []knownPatchOffset{
 			{
 				sha256: "c930bd29b76cec5d88d35e24dbee0ed0edaeba68bd7961c68856912c40d8728f",
@@ -157,6 +230,7 @@ var battleyePatches = []battleyePatch{
 				note:   "reported new client; this is the only currently observed matching legacy patch point",
 			},
 		},
+		falsePositiveCheck: "diagnostic-only because this short branch signature also occurs in unrelated container code; it must not authorize a rewrite without a validated call relationship to the client-check function",
 	},
 	{
 		name:        "legacy client check branch",
@@ -200,10 +274,33 @@ var battleyePatches = []battleyePatch{
 		falsePositiveCheck: "diagnostic-only xref context observed around reported ref 0x1BB42C; BEClient remains weak by itself because Qt metadata/dialog text can reference it without proving active client-check flow",
 	},
 	{
+		name:                "structural clientcheck_disconnected dispatch path",
+		original:            structuralClientCheckDisconnectedPattern,
+		patched:             newBytePattern("structural clientcheck_disconnected dispatch path patched", structuralClientCheckDisconnectedReplacement...),
+		replacement:         structuralClientCheckDisconnectedReplacement,
+		highRiskClientCheck: true,
+		structuralGuard: &structuralPatchGuard{
+			group: structuralClientCheckGroup,
+			kind:  structuralClientCheckDisconnected,
+		},
+		expectedOffsets: []knownPatchOffset{
+			{sha256: "c930bd29b76cec5d88d35e24dbee0ed0edaeba68bd7961c68856912c40d8728f", offset: 0x1A8E3D, note: "reported 15.13-era clientcheck_disconnected dispatch path"},
+			{sha256: "985fb4e114b3156a5488b7b35ed5d8615d58fff140a04d8e73c18ac0b4d871e5", offset: 0x1A8E3D, note: "Tibia 15.13 clientcheck_disconnected dispatch path"},
+			{sha256: "2768a9b9c1338b7664b37982e7c7982cb35a969052d799b25156be916820780a", offset: 0x1CAE4D, note: "Tibia 15.20 clientcheck_disconnected dispatch path"},
+			{sha256: "feccded03664e123ac32fa15876cccd22287a65aa5c450a80a11e2da94095ee0", offset: 0x1CB1CD, note: "Tibia 15.20 clientcheck_disconnected dispatch path"},
+			{sha256: "dbe590d978bc5f3c427879639ffac19556e0c0bb68f9d0dd72e8a4c52492ee9e", offset: 0x1CDBDD, note: "Tibia 15.23 clientcheck_disconnected dispatch path"},
+			{sha256: "fc57822ac6174fb8025cdf36bba55046b5901feae89b20eab4547b2172f16298", offset: 0x1CEBDD, note: "Tibia 15.24 clientcheck_disconnected dispatch path"},
+			{sha256: "a0c57211a9841e827e5f738ed9f5c2084fb5246a33fa035f135ece8f30bffbe8", offset: 0x1D30ED, note: "Tibia 15.25 clientcheck_disconnected dispatch path"},
+			{sha256: "d8e893689cf7b70016889add309af827f43d07f95acf7b7d4106cde885fd6627", offset: 0x1D9B9D, note: "Tibia 15.30 clientcheck_disconnected dispatch path"},
+		},
+		falsePositiveCheck: "auto-patched only when the normalized function skeleton, exact clientcheck_disconnected and error xrefs, shared Qt IAT target, executable call targets, PE runtime-function boundary, unique match, and paired enableClientCheck wrapper all validate",
+	},
+	{
 		name:                "high-risk clientcheck_disconnected dispatch path",
 		original:            newBytePattern("high-risk clientcheck_disconnected dispatch path", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x30, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x18, 0x39, 0x80, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xbe, 0x4a, 0x7d, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
 		diagnosticOnly:      true,
 		highRiskClientCheck: true,
+		legacyEvidenceOnly:  true,
 		aggressiveReplacement: neutralizeBranchJumpPattern(
 			newBytePattern("high-risk clientcheck_disconnected dispatch path [aggressive source]", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x30, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x18, 0x39, 0x80, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xbe, 0x4a, 0x7d, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
 			map[int]int{93: 0x90, 94: 0x90, 95: 0x90, 96: 0x90, 97: 0x90},
@@ -213,6 +310,33 @@ var battleyePatches = []battleyePatch{
 			{sha256: "985fb4e114b3156a5488b7b35ed5d8615d58fff140a04d8e73c18ac0b4d871e5", offset: 0x1A8E3D, note: "observed local clientcheck_disconnected dispatch path seen after the known 0x2DE804 patch"},
 		},
 		falsePositiveCheck: "diagnostic-only high-risk path; CALL bytes are wildcarded, but fixed surrounding xref/field-access bytes tie it to the reported clientcheck_disconnected dispatch context; aggressive mode nops the final signal dispatch call",
+	},
+	{
+		name:                "high-risk clientcheck_disconnected dispatch path local 2026-07",
+		original:            newBytePattern("high-risk clientcheck_disconnected dispatch path local 2026-07", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x20, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x78, 0x2c, 0xa4, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xe6, 0x86, 0x98, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
+		diagnosticOnly:      true,
+		highRiskClientCheck: true,
+		legacyEvidenceOnly:  true,
+		aggressiveReplacement: neutralizeBranchJumpPattern(
+			newBytePattern("high-risk clientcheck_disconnected dispatch path local 2026-07 [aggressive source]", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x20, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x78, 0x2c, 0xa4, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xe6, 0x86, 0x98, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
+			map[int]int{93: 0x90, 94: 0x90, 95: 0x90, 96: 0x90, 97: 0x90},
+		),
+		falsePositiveCheck: "version-scoped local 2026-07 high-risk path; aggressive mode nops the final clientcheck_disconnected signal dispatch call",
+	},
+	{
+		name:                "high-risk clientcheck_disconnected dispatch path Tibia 15.30 d8e89368",
+		original:            newBytePattern("high-risk clientcheck_disconnected dispatch path Tibia 15.30 d8e89368", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x60, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xb0, 0x6c, 0xac, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x2e, 0x87, 0xa0, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
+		diagnosticOnly:      true,
+		highRiskClientCheck: true,
+		legacyEvidenceOnly:  true,
+		aggressiveReplacement: neutralizeBranchJumpPattern(
+			newBytePattern("high-risk clientcheck_disconnected dispatch path Tibia 15.30 d8e89368 [aggressive source]", 0x48, 0x83, 0x45, 0x9f, 0x48, 0xeb, 0x10, 0x4c, 0x8d, 0x45, 0xb7, 0x48, 0x8b, 0xd3, 0x48, 0x8d, 0x4d, 0x97, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xbf, 0x60, 0x0a, 0x00, 0x00, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0xb0, 0x6c, 0xac, 0x01, 0x48, 0x8d, 0x4d, 0x37, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8b, 0xd8, 0x41, 0xb8, 0xff, 0xff, 0xff, 0xff, 0x48, 0x8d, 0x15, 0x2e, 0x87, 0xa0, 0x01, 0x48, 0x8d, 0x4d, 0x1f, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90, 0x4c, 0x8d, 0x4d, 0x97, 0x4c, 0x8b, 0xc3, 0x48, 0x8b, 0xd0, 0x48, 0x8b, 0xcf, 0xe8, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x90),
+			map[int]int{93: 0x90, 94: 0x90, 95: 0x90, 96: 0x90, 97: 0x90},
+		),
+		expectedOffsets: []knownPatchOffset{
+			{sha256: "d8e893689cf7b70016889add309af827f43d07f95acf7b7d4106cde885fd6627", offset: 0x1D9B9D, note: "Tibia 15.30 clientcheck_disconnected dispatch path"},
+		},
+		falsePositiveCheck: "hash-scoped Tibia 15.30 path; aggressive mode nops the final clientcheck_disconnected signal dispatch call",
 	},
 	{
 		name:           "candidate enableClientCheck Qt xref dispatch",
@@ -225,10 +349,33 @@ var battleyePatches = []battleyePatch{
 		falsePositiveCheck: "diagnostic-only xref context observed around reported ref 0xE8C4; exact displacement bytes keep this version-specific until the RIP target and branch/call flow are manually reviewed",
 	},
 	{
+		name:                "structural enableClientCheck wrapper",
+		original:            structuralEnableClientCheckPattern,
+		patched:             newBytePattern("structural enableClientCheck wrapper patched", structuralEnableClientCheckReplacement...),
+		replacement:         structuralEnableClientCheckReplacement,
+		highRiskClientCheck: true,
+		structuralGuard: &structuralPatchGuard{
+			group: structuralClientCheckGroup,
+			kind:  structuralEnableClientCheck,
+		},
+		expectedOffsets: []knownPatchOffset{
+			{sha256: "c930bd29b76cec5d88d35e24dbee0ed0edaeba68bd7961c68856912c40d8728f", offset: 0xE8C0, note: "reported 15.13-era enableClientCheck wrapper"},
+			{sha256: "985fb4e114b3156a5488b7b35ed5d8615d58fff140a04d8e73c18ac0b4d871e5", offset: 0xE8C0, note: "Tibia 15.13 enableClientCheck wrapper"},
+			{sha256: "2768a9b9c1338b7664b37982e7c7982cb35a969052d799b25156be916820780a", offset: 0xE9B0, note: "Tibia 15.20 enableClientCheck wrapper"},
+			{sha256: "feccded03664e123ac32fa15876cccd22287a65aa5c450a80a11e2da94095ee0", offset: 0xE9B0, note: "Tibia 15.20 enableClientCheck wrapper"},
+			{sha256: "dbe590d978bc5f3c427879639ffac19556e0c0bb68f9d0dd72e8a4c52492ee9e", offset: 0xE9E0, note: "Tibia 15.23 enableClientCheck wrapper"},
+			{sha256: "fc57822ac6174fb8025cdf36bba55046b5901feae89b20eab4547b2172f16298", offset: 0xE9E0, note: "Tibia 15.24 enableClientCheck wrapper"},
+			{sha256: "a0c57211a9841e827e5f738ed9f5c2084fb5246a33fa035f135ece8f30bffbe8", offset: 0xEB50, note: "Tibia 15.25 enableClientCheck wrapper"},
+			{sha256: "d8e893689cf7b70016889add309af827f43d07f95acf7b7d4106cde885fd6627", offset: 0xEB50, note: "Tibia 15.30 enableClientCheck wrapper"},
+		},
+		falsePositiveCheck: "auto-patched only when the exact enableClientCheck xref, writable Qt object, executable destructor thunk and tail target, PE runtime-function boundary, unique match, and paired clientcheck_disconnected dispatch all validate",
+	},
+	{
 		name:                "high-risk enableClientCheck dispatch path",
 		original:            newBytePattern("high-risk enableClientCheck dispatch path", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x65, 0xc5, 0x99, 0x01, 0x48, 0x8d, 0x0d, 0x36, 0x04, 0xcf, 0x01, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x11, 0xd0, 0xf7, 0x00, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
 		diagnosticOnly:      true,
 		highRiskClientCheck: true,
+		legacyEvidenceOnly:  true,
 		aggressiveReplacement: neutralizeBranchJumpPattern(
 			newBytePattern("high-risk enableClientCheck dispatch path [aggressive source]", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x65, 0xc5, 0x99, 0x01, 0x48, 0x8d, 0x0d, 0x36, 0x04, 0xcf, 0x01, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x11, 0xd0, 0xf7, 0x00, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
 			map[int]int{18: 0x90, 19: 0x90, 20: 0x90, 21: 0x90, 22: 0x90, 23: 0x90},
@@ -238,6 +385,33 @@ var battleyePatches = []battleyePatch{
 			{sha256: "985fb4e114b3156a5488b7b35ed5d8615d58fff140a04d8e73c18ac0b4d871e5", offset: 0xE8C0, note: "observed local enableClientCheck dispatch path seen after the known 0x2DE804 patch"},
 		},
 		falsePositiveCheck: "diagnostic-only high-risk path; CALL/JMP bytes are wildcarded, but fixed enableClientCheck xref and thunk shape keep the match scoped to the reported dispatch context; aggressive mode nops only the Qt metadata call and preserves the original tail jump",
+	},
+	{
+		name:                "high-risk enableClientCheck dispatch path local 2026-07",
+		original:            newBytePattern("high-risk enableClientCheck dispatch path local 2026-07", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x45, 0x59, 0xc0, 0x01, 0x48, 0x8d, 0x0d, 0x96, 0x9a, 0x35, 0x02, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x01, 0xa6, 0x15, 0x01, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
+		diagnosticOnly:      true,
+		highRiskClientCheck: true,
+		legacyEvidenceOnly:  true,
+		aggressiveReplacement: neutralizeBranchJumpPattern(
+			newBytePattern("high-risk enableClientCheck dispatch path local 2026-07 [aggressive source]", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x45, 0x59, 0xc0, 0x01, 0x48, 0x8d, 0x0d, 0x96, 0x9a, 0x35, 0x02, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x01, 0xa6, 0x15, 0x01, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
+			map[int]int{18: 0x90, 19: 0x90, 20: 0x90, 21: 0x90, 22: 0x90, 23: 0x90},
+		),
+		falsePositiveCheck: "version-scoped local 2026-07 high-risk path; aggressive mode nops the enableClientCheck Qt metadata call and preserves the tail jump",
+	},
+	{
+		name:                "high-risk enableClientCheck dispatch path Tibia 15.30 d8e89368",
+		original:            newBytePattern("high-risk enableClientCheck dispatch path Tibia 15.30 d8e89368", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x8d, 0x03, 0xc9, 0x01, 0x48, 0x8d, 0x0d, 0x86, 0x0a, 0x43, 0x02, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x01, 0x39, 0x1b, 0x01, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
+		diagnosticOnly:      true,
+		highRiskClientCheck: true,
+		legacyEvidenceOnly:  true,
+		aggressiveReplacement: neutralizeBranchJumpPattern(
+			newBytePattern("high-risk enableClientCheck dispatch path Tibia 15.30 d8e89368 [aggressive source]", 0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x15, 0x8d, 0x03, 0xc9, 0x01, 0x48, 0x8d, 0x0d, 0x86, 0x0a, 0x43, 0x02, 0xff, 0x15, wildcardByte, wildcardByte, wildcardByte, wildcardByte, 0x48, 0x8d, 0x0d, 0x01, 0x39, 0x1b, 0x01, 0x48, 0x83, 0xc4, 0x28, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte, wildcardByte),
+			map[int]int{18: 0x90, 19: 0x90, 20: 0x90, 21: 0x90, 22: 0x90, 23: 0x90},
+		),
+		expectedOffsets: []knownPatchOffset{
+			{sha256: "d8e893689cf7b70016889add309af827f43d07f95acf7b7d4106cde885fd6627", offset: 0xEB50, note: "Tibia 15.30 enableClientCheck dispatch path"},
+		},
+		falsePositiveCheck: "hash-scoped Tibia 15.30 path; aggressive mode nops the enableClientCheck Qt metadata call and preserves the tail jump",
 	},
 }
 
@@ -413,22 +587,42 @@ func removeBattlEye(tibiaPath string, tibiaBinary []byte, aggressive bool) []byt
 	for patchIndex, patch := range battleyePatches {
 		activeBattleyePatches[patchIndex] = patch.withAggressiveMode(aggressive)
 	}
+	peData := inspectPE(tibiaBinary)
+	structuralPlan := buildStructuralPatchPlan(tibiaBinary, peData, activeBattleyePatches)
+	var beforeBattleyePatches []byte
+	if structuralPlan.verifiedGroups[structuralClientCheckGroup] {
+		fmt.Printf("[INFO] BattlEye structural client-check pair verified uniquely before patching\n")
+		beforeBattleyePatches = append([]byte(nil), tibiaBinary...)
+	}
 
 	patchesApplied := 0
 	signaturesApplied := 0
 	alreadyApplied := 0
 	patchableSignatures := 0
-	for _, patch := range activeBattleyePatches {
-		if !patch.diagnosticOnly || (aggressive && len(patch.aggressiveReplacement) > 0) {
+	for patchIndex, patch := range activeBattleyePatches {
+		originalOffsets := patch.original.findAll(tibiaBinary)
+		patchedOffsets := patch.effectivePatchedPattern().findAll(tibiaBinary)
+		if patch.structuralGuard != nil {
+			match := structuralPlan.matches[patchIndex]
+			if !structuralPlan.verifiedGroups[patch.structuralGuard.group] {
+				if len(originalOffsets) > 0 || len(patchedOffsets) > 0 {
+					fmt.Printf("[WARN] BattlEye structural signature %q matched byte shape original=%s patched=%s but failed unique paired structural verification; not patched\n", patch.name, formatOffsetsLimited(originalOffsets, 6), formatOffsetsLimited(patchedOffsets, 6))
+				} else {
+					fmt.Printf("[INFO] BattlEye structural signature %q not found\n", patch.name)
+				}
+				continue
+			}
+			originalOffsets = match.originalOffsets
+			patchedOffsets = match.patchedOffsets
+		}
+		legacyHighRiskEvidence := patch.legacyEvidenceOnly
+		eligiblePatch := !patch.diagnosticOnly || (aggressive && !legacyHighRiskEvidence && len(patch.aggressiveReplacement) > 0)
+		if eligiblePatch && (len(originalOffsets) > 0 || len(patchedOffsets) > 0) {
 			patchableSignatures++
 		}
-	}
-	for _, patch := range activeBattleyePatches {
-		originalOffsets := patch.original.findAll(tibiaBinary)
-		patchedOffsets := patch.patched.findAll(tibiaBinary)
 
 		if patch.diagnosticOnly {
-			if len(originalOffsets) > 0 && aggressive && len(patch.aggressiveReplacement) > 0 {
+			if !legacyHighRiskEvidence && len(originalOffsets) > 0 && aggressive && len(patch.aggressiveReplacement) > 0 {
 				aggressivePatch := patch
 				aggressivePatch.diagnosticOnly = false
 				aggressivePatch.replacement = append([]int(nil), patch.aggressiveReplacement...)
@@ -467,13 +661,27 @@ func removeBattlEye(tibiaPath string, tibiaBinary []byte, aggressive bool) []byt
 		fmt.Printf("[INFO] BattlEye signature %q not found\n", patch.name)
 	}
 
+	if beforeBattleyePatches != nil {
+		postPatchPE := inspectPE(tibiaBinary)
+		postPatchPlan := buildStructuralPatchPlan(tibiaBinary, postPatchPE, activeBattleyePatches)
+		if !postPatchPlan.groupFullyPatched(activeBattleyePatches, structuralClientCheckGroup) {
+			fmt.Printf("[ERROR] BattlEye structural post-patch verification failed; rolling back all BattlEye byte changes\n")
+			return beforeBattleyePatches
+		}
+		fmt.Printf("[INFO] BattlEye structural client-check pair verified after patching\n")
+	}
+
 	if patchesApplied > 0 {
 		fmt.Printf("[PATCH] BattlEye byte patch summary: applied %d occurrence(s) across %d/%d patchable signature(s)\n", patchesApplied, signaturesApplied, patchableSignatures)
 		if signaturesApplied < patchableSignatures {
 			fmt.Printf("[WARN] BattlEye byte patch is partial for this binary; missing signatures can mean this client version uses different code paths\n")
 		}
 		if hasClientCheckStringIndicators(tibiaBinary) {
-			fmt.Printf("[WARN] Client-check strings remain after BattlEye patching; this edit should be treated as PARTIAL unless code-reference diagnostics prove the paths inactive\n")
+			if structuralPlan.verifiedGroups[structuralClientCheckGroup] {
+				fmt.Printf("[INFO] Client-check strings remain as Qt metadata; the structurally verified dispatch pair was neutralized\n")
+			} else {
+				fmt.Printf("[WARN] Client-check strings remain after BattlEye patching; this edit should be treated as PARTIAL unless code-reference diagnostics prove the paths inactive\n")
+			}
 		}
 		return tibiaBinary
 	}
@@ -481,7 +689,11 @@ func removeBattlEye(tibiaPath string, tibiaBinary []byte, aggressive bool) []byt
 	if alreadyApplied > 0 {
 		fmt.Printf("[WARN] BattlEye byte patches were already present (%d occurrence(s)); no new byte patch was applied\n", alreadyApplied)
 		if hasClientCheckStringIndicators(tibiaBinary) {
-			fmt.Printf("[WARN] Client-check strings remain in an already patched binary; this should be treated as PARTIAL unless code-reference diagnostics prove the paths inactive\n")
+			if structuralPlan.verifiedGroups[structuralClientCheckGroup] {
+				fmt.Printf("[INFO] Client-check strings remain as Qt metadata; the structurally verified dispatch pair is already neutralized\n")
+			} else {
+				fmt.Printf("[WARN] Client-check strings remain in an already patched binary; this should be treated as PARTIAL unless code-reference diagnostics prove the paths inactive\n")
+			}
 		}
 		return tibiaBinary
 	}
@@ -543,32 +755,41 @@ func analyzeTibiaBinary(tibiaPath string, tibiaBinary []byte) diagnosisReport {
 	sum := sha256.Sum256(tibiaBinary)
 	sha256Text := fmt.Sprintf("%x", sum[:])
 	diagnosis := diagnosisReport{
-		path:          tibiaPath,
-		size:          len(tibiaBinary),
-		sha256:        sha256Text,
-		isWindowsExe:  isWindowsExecutable(tibiaPath, tibiaBinary),
-		patchStatuses: scanBattlEyePatchStatus(tibiaBinary, sha256Text),
+		path:         tibiaPath,
+		size:         len(tibiaBinary),
+		sha256:       sha256Text,
+		isWindowsExe: isWindowsExecutable(tibiaPath, tibiaBinary),
 	}
 
 	if diagnosis.isWindowsExe {
 		diagnosis.pe = inspectPE(tibiaBinary)
 	}
 
+	diagnosis.patchStatuses = scanBattlEyePatchStatus(tibiaBinary, sha256Text, diagnosis.pe)
 	diagnosis.clientCheckFindings = scanClientCheckFindings(tibiaBinary, diagnosis.pe, diagnosis.patchStatuses)
 	diagnosis.qtIndicators = scanQtContextIndicators(tibiaBinary, diagnosis.pe)
 	return diagnosis
 }
 
-func scanBattlEyePatchStatus(tibiaBinary []byte, sha256Text string) []battleyePatchStatus {
+func scanBattlEyePatchStatus(tibiaBinary []byte, sha256Text string, peData peInfo) []battleyePatchStatus {
 	statuses := make([]battleyePatchStatus, 0, len(battleyePatches))
-	for _, patch := range battleyePatches {
-		patchedOffsets := patch.patched.findAll(tibiaBinary)
-		if patch.diagnosticOnly && len(patch.aggressiveReplacement) > 0 {
-			patchedOffsets = append(patchedOffsets, newBytePattern(patch.name+" [aggressive]", patch.aggressiveReplacement...).findAll(tibiaBinary)...)
+	structuralPlan := buildStructuralPatchPlan(tibiaBinary, peData, battleyePatches)
+	for patchIndex, patch := range battleyePatches {
+		originalOffsets := patch.original.findAll(tibiaBinary)
+		patchedOffsets := patch.effectivePatchedPattern().findAll(tibiaBinary)
+		if patch.structuralGuard != nil {
+			if structuralPlan.verifiedGroups[patch.structuralGuard.group] {
+				match := structuralPlan.matches[patchIndex]
+				originalOffsets = match.originalOffsets
+				patchedOffsets = match.patchedOffsets
+			} else {
+				originalOffsets = nil
+				patchedOffsets = nil
+			}
 		}
 		statuses = append(statuses, battleyePatchStatus{
 			patch:                patch,
-			originalOffset:       patch.original.findAll(tibiaBinary),
+			originalOffset:       originalOffsets,
 			patchedOffset:        patchedOffsets,
 			expectedOffsetHits:   patch.expectedOffsetHits(tibiaBinary, sha256Text),
 			expectedOffsetMisses: patch.expectedOffsetMisses(tibiaBinary, sha256Text),
@@ -611,12 +832,39 @@ func inspectPE(tibiaBinary []byte) peInfo {
 		}
 
 		info.sections = append(info.sections, peSectionInfo{
-			name:     strings.TrimRight(section.Name, "\x00"),
-			rawStart: rawStart,
-			rawEnd:   rawEnd,
-			rvaStart: int(section.VirtualAddress),
-			rvaEnd:   int(section.VirtualAddress) + virtualSize,
-			isCode:   section.Characteristics&0x00000020 != 0 || section.Characteristics&0x20000000 != 0,
+			name:       strings.TrimRight(section.Name, "\x00"),
+			rawStart:   rawStart,
+			rawEnd:     rawEnd,
+			rvaStart:   int(section.VirtualAddress),
+			rvaEnd:     int(section.VirtualAddress) + virtualSize,
+			isCode:     section.Characteristics&0x00000020 != 0 || section.Characteristics&0x20000000 != 0,
+			isWritable: section.Characteristics&0x80000000 != 0,
+		})
+	}
+
+	if peFile.FileHeader.Machine == pe.IMAGE_FILE_MACHINE_AMD64 {
+		for _, section := range info.sections {
+			if section.name != ".pdata" {
+				continue
+			}
+
+			for offset := section.rawStart; offset+12 <= section.rawEnd; offset += 12 {
+				beginRVA := int(binary.LittleEndian.Uint32(tibiaBinary[offset : offset+4]))
+				endRVA := int(binary.LittleEndian.Uint32(tibiaBinary[offset+4 : offset+8]))
+				if beginRVA == 0 || endRVA <= beginRVA {
+					continue
+				}
+				beginSection, beginOK := info.sectionForRVA(beginRVA)
+				endSection, endOK := info.sectionForRVA(endRVA - 1)
+				if !beginOK || !endOK || !beginSection.isCode || beginSection.name != endSection.name {
+					continue
+				}
+				info.runtimeFunctions = append(info.runtimeFunctions, peRuntimeFunction{beginRVA: beginRVA, endRVA: endRVA})
+			}
+			break
+		}
+		sort.Slice(info.runtimeFunctions, func(left, right int) bool {
+			return info.runtimeFunctions[left].beginRVA < info.runtimeFunctions[right].beginRVA
 		})
 	}
 
@@ -629,6 +877,189 @@ func inspectPE(tibiaBinary []byte) peInfo {
 	sort.Strings(info.imports)
 
 	return info
+}
+
+func buildStructuralPatchPlan(tibiaBinary []byte, peData peInfo, patches []battleyePatch) structuralPatchPlan {
+	plan := structuralPatchPlan{
+		matches:        make(map[int]structuralPatchMatch),
+		verifiedGroups: make(map[string]bool),
+	}
+	groupMembers := make(map[string]int)
+	groupUniqueMatches := make(map[string]int)
+
+	for patchIndex, patch := range patches {
+		if patch.structuralGuard == nil {
+			continue
+		}
+
+		group := patch.structuralGuard.group
+		groupMembers[group]++
+		match := structuralPatchMatch{
+			originalOffsets: patch.structurallyValidOffsets(tibiaBinary, peData, patch.original.findAll(tibiaBinary), false),
+			patchedOffsets:  patch.structurallyValidOffsets(tibiaBinary, peData, patch.effectivePatchedPattern().findAll(tibiaBinary), true),
+		}
+		match.unique = len(match.originalOffsets)+len(match.patchedOffsets) == 1
+		if match.unique {
+			groupUniqueMatches[group]++
+		}
+		plan.matches[patchIndex] = match
+	}
+
+	for group, memberCount := range groupMembers {
+		plan.verifiedGroups[group] = memberCount > 0 && groupUniqueMatches[group] == memberCount
+	}
+	return plan
+}
+
+func (plan structuralPatchPlan) groupFullyPatched(patches []battleyePatch, group string) bool {
+	members := 0
+	for patchIndex, patch := range patches {
+		if patch.structuralGuard == nil || patch.structuralGuard.group != group {
+			continue
+		}
+		members++
+		match := plan.matches[patchIndex]
+		if !match.unique || len(match.originalOffsets) != 0 || len(match.patchedOffsets) != 1 {
+			return false
+		}
+	}
+	return members > 0 && plan.verifiedGroups[group]
+}
+
+func (patch battleyePatch) structurallyValidOffsets(tibiaBinary []byte, peData peInfo, offsets []int, patched bool) []int {
+	validOffsets := make([]int, 0, len(offsets))
+	for _, offset := range offsets {
+		if patch.isStructurallyValidAt(tibiaBinary, peData, offset, patched) {
+			validOffsets = append(validOffsets, offset)
+		}
+	}
+	return validOffsets
+}
+
+func (patch battleyePatch) isStructurallyValidAt(tibiaBinary []byte, peData peInfo, offset int, patched bool) bool {
+	if patch.structuralGuard == nil || !peData.valid {
+		return false
+	}
+
+	switch patch.structuralGuard.kind {
+	case structuralClientCheckDisconnected:
+		return validateClientCheckDisconnectedStructure(tibiaBinary, peData, offset, patched)
+	case structuralEnableClientCheck:
+		return validateEnableClientCheckStructure(tibiaBinary, peData, offset, patched)
+	default:
+		return false
+	}
+}
+
+func validateClientCheckDisconnectedStructure(tibiaBinary []byte, peData peInfo, offset int, patched bool) bool {
+	const bodyLength = 99
+	if !peData.codeRangeWithinRuntimeFunction(offset, bodyLength, false) {
+		return false
+	}
+
+	memberOffset := offset + 26
+	if memberOffset < 0 || memberOffset+4 > len(tibiaBinary) {
+		return false
+	}
+	memberDisplacement := int(int32(binary.LittleEndian.Uint32(tibiaBinary[memberOffset : memberOffset+4])))
+	if memberDisplacement < 0x100 || memberDisplacement > 0x4000 || memberDisplacement%8 != 0 {
+		return false
+	}
+
+	if !matchesRIPCString(tibiaBinary, peData, offset+36, "clientcheck_disconnected") ||
+		!matchesRIPCString(tibiaBinary, peData, offset+62, "error") {
+		return false
+	}
+
+	firstQtIATRVA, firstQtOK := relativeTargetRVA(tibiaBinary, peData, offset+47, 6, 2)
+	secondQtIATRVA, secondQtOK := relativeTargetRVA(tibiaBinary, peData, offset+73, 6, 2)
+	if !firstQtOK || !secondQtOK || firstQtIATRVA != secondQtIATRVA || !peData.rvaIsNonCode(firstQtIATRVA) {
+		return false
+	}
+
+	if !relativeTargetIsCode(tibiaBinary, peData, offset+18, 5, 1) {
+		return false
+	}
+	if !patched && !relativeTargetIsCode(tibiaBinary, peData, offset+93, 5, 1) {
+		return false
+	}
+
+	return true
+}
+
+func validateEnableClientCheckStructure(tibiaBinary []byte, peData peInfo, offset int, patched bool) bool {
+	const functionBodyLength = 40
+	if !peData.codeRangeWithinRuntimeFunction(offset, functionBodyLength, true) {
+		return false
+	}
+	section, ok := peData.sectionForOffset(offset)
+	if !ok || !section.isCode || offset+44 > section.rawEnd || offset+44 > len(tibiaBinary) {
+		return false
+	}
+
+	if !matchesRIPCString(tibiaBinary, peData, offset+4, "enableClientCheck") {
+		return false
+	}
+
+	objectRVA, objectOK := relativeTargetRVA(tibiaBinary, peData, offset+11, 7, 3)
+	objectSection, objectSectionOK := peData.sectionForRVA(objectRVA)
+	if !objectOK || !objectSectionOK || !objectSection.isWritable || objectSection.isCode {
+		return false
+	}
+
+	destructorThunkRVA, thunkOK := relativeTargetRVA(tibiaBinary, peData, offset+24, 7, 3)
+	destructorThunkOffset, thunkOffsetOK := peData.offsetForRVA(destructorThunkRVA)
+	if !thunkOK || !thunkOffsetOK || !peData.rvaIsCode(destructorThunkRVA) || destructorThunkOffset+14 > len(tibiaBinary) {
+		return false
+	}
+	if !bytes.Equal(tibiaBinary[destructorThunkOffset:destructorThunkOffset+3], []byte{0x48, 0x8d, 0x0d}) ||
+		!bytes.Equal(tibiaBinary[destructorThunkOffset+7:destructorThunkOffset+10], []byte{0x48, 0xff, 0x25}) {
+		return false
+	}
+
+	thunkObjectRVA, thunkObjectOK := relativeTargetRVA(tibiaBinary, peData, destructorThunkOffset, 7, 3)
+	destructorIATRVA, destructorIATOK := relativeTargetRVA(tibiaBinary, peData, destructorThunkOffset+7, 7, 3)
+	if !thunkObjectOK || thunkObjectRVA != objectRVA || !destructorIATOK || !peData.rvaIsNonCode(destructorIATRVA) {
+		return false
+	}
+
+	if !patched {
+		constructorIATRVA, constructorOK := relativeTargetRVA(tibiaBinary, peData, offset+18, 6, 2)
+		if !constructorOK || !peData.rvaIsNonCode(constructorIATRVA) {
+			return false
+		}
+	}
+
+	return relativeTargetIsCode(tibiaBinary, peData, offset+35, 5, 1)
+}
+
+func matchesRIPCString(tibiaBinary []byte, peData peInfo, instructionOffset int, value string) bool {
+	targetRVA, ok := relativeTargetRVA(tibiaBinary, peData, instructionOffset, 7, 3)
+	if !ok || !peData.rvaIsNonCode(targetRVA) {
+		return false
+	}
+	targetOffset, ok := peData.offsetForRVA(targetRVA)
+	if !ok || targetOffset < 0 || targetOffset+len(value) >= len(tibiaBinary) {
+		return false
+	}
+	return bytes.Equal(tibiaBinary[targetOffset:targetOffset+len(value)], []byte(value)) && tibiaBinary[targetOffset+len(value)] == 0
+}
+
+func relativeTargetRVA(tibiaBinary []byte, peData peInfo, instructionOffset int, instructionLength int, displacementOffset int) (int, bool) {
+	if instructionOffset < 0 || instructionOffset+displacementOffset+4 > len(tibiaBinary) {
+		return 0, false
+	}
+	instructionRVA, ok := peData.rvaForOffset(instructionOffset)
+	if !ok {
+		return 0, false
+	}
+	displacement := int(int32(binary.LittleEndian.Uint32(tibiaBinary[instructionOffset+displacementOffset : instructionOffset+displacementOffset+4])))
+	return instructionRVA + instructionLength + displacement, true
+}
+
+func relativeTargetIsCode(tibiaBinary []byte, peData peInfo, instructionOffset int, instructionLength int, displacementOffset int) bool {
+	targetRVA, ok := relativeTargetRVA(tibiaBinary, peData, instructionOffset, instructionLength, displacementOffset)
+	return ok && peData.rvaIsCode(targetRVA)
 }
 
 func scanClientCheckFindings(tibiaBinary []byte, peData peInfo, patchStatuses []battleyePatchStatus) []clientCheckFinding {
@@ -812,6 +1243,9 @@ func isStrongClientCheckEvidence(indicatorName string, reference clientCheckRefe
 
 func isSuspiciousActiveClientCheckEvidence(indicatorName string, reference clientCheckReference) bool {
 	if reference.strongUnsupported {
+		return false
+	}
+	if reference.knownPatchNearby {
 		return false
 	}
 	if !isCriticalClientCheckIndicator(indicatorName) {
@@ -1241,6 +1675,9 @@ func (diagnosis diagnosisReport) clientCheckVerdict() string {
 	if diagnosis.hasPatchedClientCheckSignature() && diagnosis.suspiciousActiveEvidenceCount() > 0 {
 		return "WARNING: known client-check patch applied but suspicious branch/call evidence remains"
 	}
+	if diagnosis.structuralGroupFullyPatched(structuralClientCheckGroup) {
+		return "SUPPORTED: structurally verified client-check pair is patched and no strong client-check evidence remains"
+	}
 
 	coverage := diagnosis.knownPatchCoverage()
 	patchableCount := patchableBattleyePatchCount()
@@ -1300,11 +1737,25 @@ func (diagnosis diagnosisReport) highRiskClientCheckDiagnosticCount() int {
 		if !status.patch.diagnosticOnly || !status.patch.highRiskClientCheck {
 			continue
 		}
-		if len(status.originalOffset) > 0 || len(status.patchedOffset) > 0 {
+		if len(status.originalOffset) > 0 {
 			count++
 		}
 	}
 	return count
+}
+
+func (diagnosis diagnosisReport) structuralGroupFullyPatched(group string) bool {
+	members := 0
+	for _, status := range diagnosis.patchStatuses {
+		if status.patch.structuralGuard == nil || status.patch.structuralGuard.group != group {
+			continue
+		}
+		members++
+		if len(status.originalOffset) != 0 || len(status.patchedOffset) != 1 {
+			return false
+		}
+	}
+	return members > 0
 }
 
 func (diagnosis diagnosisReport) strongUnsupportedEvidenceCount() int {
@@ -1782,6 +2233,16 @@ func (patch battleyePatch) withAggressiveMode(aggressive bool) battleyePatch {
 	return patch
 }
 
+func (patch battleyePatch) effectivePatchedPattern() bytePattern {
+	if len(patch.patched.data) > 0 {
+		return patch.patched
+	}
+	if len(patch.aggressiveReplacement) > 0 {
+		return newBytePattern(patch.name+" [aggressive]", patch.aggressiveReplacement...)
+	}
+	return bytePattern{}
+}
+
 func (pattern bytePattern) findAll(data []byte) []int {
 	offsets := make([]int, 0)
 	if len(pattern.data) == 0 || len(data) < len(pattern.data) {
@@ -1836,7 +2297,7 @@ func (patch battleyePatch) expectedOffsetMisses(data []byte, sha256Text string) 
 }
 
 func (patch battleyePatch) matchesAtExpectedOffset(data []byte, offset int) bool {
-	return patch.original.matchesAt(data, offset) || patch.patched.matchesAt(data, offset)
+	return patch.original.matchesAt(data, offset) || patch.effectivePatchedPattern().matchesAt(data, offset)
 }
 
 func (expected knownPatchOffset) appliesToSHA256(sha256Text string) bool {
@@ -1850,6 +2311,85 @@ func (peData peInfo) rvaForOffset(offset int) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func (peData peInfo) offsetForRVA(rva int) (int, bool) {
+	section, ok := peData.sectionForRVA(rva)
+	if !ok {
+		return 0, false
+	}
+	offset := section.rawStart + rva - section.rvaStart
+	if offset < section.rawStart || offset >= section.rawEnd {
+		return 0, false
+	}
+	return offset, true
+}
+
+func (peData peInfo) sectionForOffset(offset int) (peSectionInfo, bool) {
+	for _, section := range peData.sections {
+		if offset >= section.rawStart && offset < section.rawEnd {
+			return section, true
+		}
+	}
+	return peSectionInfo{}, false
+}
+
+func (peData peInfo) sectionForRVA(rva int) (peSectionInfo, bool) {
+	for _, section := range peData.sections {
+		if rva >= section.rvaStart && rva < section.rvaEnd {
+			return section, true
+		}
+	}
+	return peSectionInfo{}, false
+}
+
+func (peData peInfo) rvaIsCode(rva int) bool {
+	section, ok := peData.sectionForRVA(rva)
+	return ok && section.isCode
+}
+
+func (peData peInfo) rvaIsNonCode(rva int) bool {
+	section, ok := peData.sectionForRVA(rva)
+	return ok && !section.isCode
+}
+
+func (peData peInfo) runtimeFunctionContainingRVA(rva int) (peRuntimeFunction, bool) {
+	index := sort.Search(len(peData.runtimeFunctions), func(index int) bool {
+		return peData.runtimeFunctions[index].endRVA > rva
+	})
+	if index >= len(peData.runtimeFunctions) {
+		return peRuntimeFunction{}, false
+	}
+	function := peData.runtimeFunctions[index]
+	if rva < function.beginRVA || rva >= function.endRVA {
+		return peRuntimeFunction{}, false
+	}
+	return function, true
+}
+
+func (peData peInfo) codeRangeWithinRuntimeFunction(offset int, length int, requireExactFunction bool) bool {
+	if length <= 0 {
+		return false
+	}
+	startSection, startSectionOK := peData.sectionForOffset(offset)
+	endSection, endSectionOK := peData.sectionForOffset(offset + length - 1)
+	if !startSectionOK || !endSectionOK || !startSection.isCode || startSection.name != endSection.name {
+		return false
+	}
+	startRVA, startRVAOK := peData.rvaForOffset(offset)
+	endRVA, endRVAOK := peData.rvaForOffset(offset + length - 1)
+	if !startRVAOK || !endRVAOK {
+		return false
+	}
+	endRVA++
+	function, ok := peData.runtimeFunctionContainingRVA(startRVA)
+	if !ok || endRVA > function.endRVA {
+		return false
+	}
+	if requireExactFunction && (function.beginRVA != startRVA || function.endRVA != endRVA) {
+		return false
+	}
+	return true
 }
 
 func utf16LEBytes(value string) []byte {
